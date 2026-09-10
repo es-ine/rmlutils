@@ -1,0 +1,210 @@
+---
+title: "Tutorial de benchModeler"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## El objeto benchRegressorModeler
+
+Este objeto es uno de los modeler complejos de RMLutils. Es un modeler multivariante en el que se debe cumplir una cierta restricción lineal (a especificar por el usuario) entre los outputs de sus modelers internos.
+
+```{r}
+#Generamos un conjunto de datos apropiado para benchModeler
+original_data.dt <- generateRegressionData(n_samples = 1000, generate_random_weights = FALSE)
+
+#Definimos nuevas variables en los datos que tengan una restricción específica
+#En nuestro caso: regression_target = A + B
+data.dt <- data.table::copy(original_data.dt)
+data.dt[, A := round(runif(dim(data.dt)[1], min = 0, max = 5))]
+data.dt[, B := regression_target - A]
+
+#Definimos las particiones de train y de test
+set.seed(273)
+data.keys <- 1:nrow(data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+```
+
+### Instalación de osqp, gsubfn y Matrix
+
+Primero, debemos comprobar si las librerías `osqp`, `gsubfn` y `Matrix` están instaladas:
+
+```{r}
+require("osqp")
+require("gsubfn")
+require("Matrix")
+```
+
+Si no lo estuvieran, podemos instalarlas fácilmente desde el CRAN,
+mediante el comando `install.packages(...)`.
+
+La versión de la librería `osqp` debe ser como mínimo la `1.0.0`.
+
+### Instanciado
+
+El benchRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `submodels`: Lista de modelers para predecir sus variables objetivo.
+
+- `benchmarks`: String o vector de strings indicando las restricciones lineales que el benchModeler debe cumplir.
+
+- `optWeights`: String indicando el tipo de pesos opcionales, que pueden ser `"uniform"` o `"MSE"`. Se toman `"uniform"` de forma predeterminada.
+
+- `models`: (Opcional) Lista de modelers a utilizar. Se seleccionarán tan solo aquellos cuyas variables target estén dentro de benchmarks. Si se proporciona este parámetro, no debe proporcionarse a la vez el parámetro `submodels`.
+
+En este tutorial se emplearán modelers de ranger para definir el benchModeler. El usuario deberá comprobar que tiene la librería `ranger` instalada.
+
+Definimos primero a los submodelers:
+
+```{r}
+#Definimos los parámetros de los submodelers
+#Destacamos que ninguno de los modelers ve la variable objetivo de otro. Solo ven la suya
+params_b1 <- list(
+  "num.trees" = 20,
+  "max.depth" = 20
+)
+target_b1 <- "regression_target"
+regressors_b1 <- setdiff(colnames(original_data.dt), target_b1)
+
+params_b2 <- list(
+  "num.trees" = 30,
+  "max.depth" = 10
+)
+target_b2 <- "A"
+regressors_b2 <- setdiff(colnames(original_data.dt), c(target_b2, target_b1))
+
+params_b3 <- list(
+  "num.trees" = 40,
+  "max.depth" = 15
+)
+target_b3 <- "B"
+regressors_b3 <- setdiff(colnames(original_data.dt), c(target_b3, target_b1))
+
+modeler1 <- rangerRegressorModeler(params = params_b1, target = target_b1, regressors = regressors_b1)
+
+modeler2 <- rangerRegressorModeler(params = params_b2, target = target_b2, regressors = regressors_b2)
+
+modeler3 <- rangerRegressorModeler(params = params_b3, target = target_b3, regressors = regressors_b3)
+```
+
+Definimos el benchModeler:
+
+```{r}
+b_modeler <- benchRegressorModeler(submodels = list(modeler1,modeler2,modeler3),
+                                   benchmarks = "A+B-regression_target==0")
+```
+
+### crossValidate
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+crossValidate(modeler = b_modeler,
+              data = data.dt,
+              CVSampler = cvSampler(key = data.keys, folds = 3),
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+b_modeler <- train(b_modeler,
+                   data = data.dt,
+                   subSet = train.keys)
+```
+
+### getPredictions
+
+```{r}
+preds <- getPredictions(object = b_modeler,
+                        data = data.dt,
+                        subSet = test.keys)
+head(preds)
+```
+
+### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = b_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = b_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "bench_reg.mlu"
+modelSave(object = b_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```
+

@@ -1,0 +1,421 @@
+---
+title: "Tutorial de modelers de H2O"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+**Advertencia: Debido al uso de la nube de H2O, este documento no puede compilarse en un archivo html. Para ver los resultados, el usuario puede ejecutar manualmente los chunks de código en orden.**
+
+## Inicializar la nube de H2O
+
+La gran diferencia de h2o con las demás librerías de machine learning en RMLutils, es que las operaciones no ocurren en R, sino en la nube de h2o. Previamente, debemos inicializar la nube y pasar nuestros datos a dataframes de h2o antes de llamar a ningún objeto modeler.
+
+Primero, comprobamos si la librería de `h2o` está instalada:
+
+```{r}
+require("h2o")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("h2o")`.
+
+El funcionamiento de la nube de h2o puede ser problemático según la versión de java que tenga nuestro ordenador o servidor.
+
+Proponemos dos alternativas al usuario para su funcionamiento. Si ninguna de ellas funciona, deberá referirse a la documentación oficial de h2o y java para tratar de solventarlo en su caso.
+
+### Directamente a través de la propia librería de h2o
+
+Si tenemos instalada una versión compatible de java, basta con emplear el comando `h2o.init(port = 50000, startH2O = TRUE)` de la librería de h2o (pudiendo cambiar el puerto por si el 50000 ya estuviera en uso). En caso de que esto no funcione, probamos la otra opción.
+
+### Creación manual de la nube de h2o
+
+Es necesario que el usuario se descargue una versión de h2o compatible en su propia máquina (debe comprobar que es un archivo llamado h2o.jar) y deberá ejecutar por línea de comandos una orden que lance una nube de h2o en un puerto a su elección. Evidentemente, el usuario debería tener descargada una versión de java compatible, por ejemplo, la 1.8.0.
+
+En un servidor linux, por ejemplo, el comando sería:
+
+```
+"/ruta/a/java" -jar "ruta/a/h2o.jar" -port 50000 &
+```
+
+"&" hace que el proceso se ejecute en segundo plano y no nos bloquee la línea de comandos. Es especialmente útil por si queremos parar el proceso o ejecutar cualquier otro comando mientras la nube esté funcionando.
+
+Tras esto, en el script que estemos ejecutando, deberemos llamar a `h2o.init()`, pero indicándole que no inicie la nube de h2o, pues ya la hemos activado nosotros, y especificándole el puerto donde esté:
+
+```
+h2o.init(port = 50000, startH2O = FALSE)
+```
+
+## Uso de la nube de H2O
+
+Los modelers de H2O funcionan con data.tables y H2OFrames indistintamente. El usuario es libre de emplear el método que le resulte más cómodo.
+
+Cuando pasemos objetos a la nube de h2o, es recomendable asignarles *keys* que representen lo que son, ya que si luego queremos examinar el contenido de la nube, es mucho más intuitivo ver los nombres de las variables como claves en vez de las claves generadas por h2o de forma automática.
+
+```{r test-h2o-cloud}
+#Iniciamos la nube de H2O (a través de la propia librería)
+h2o.init(port = 54321, startH2O = TRUE)
+
+#Generamos unos conjuntos de datos (data.table) y los pasamos a la nube
+r_data.dt <- generateRegressionData(n_samples = 100, generate_random_weights = FALSE)
+c_data.dt <- generateBinaryClassificationData(n_samples = 100, generate_random_weights = FALSE)
+
+r_data.h2o <- h2o::as.h2o(r_data.dt, destination_frame = "reg_data")
+c_data.h2o <- h2o::as.h2o(c_data.dt, destination_frame = "classif_data")
+
+#Vemos el contenido de la nube
+print(h2o.ls())
+
+#Borramos los datos de clasificación
+h2o.rm("classif_data")
+
+#Comprobamos que ya no está en la nube
+print(h2o.ls())
+
+#Vemos los tipos de las columnas de reg_data
+print(h2o.getTypes(r_data.h2o))
+
+#Cerramos la nube
+#h2o.shutdown(prompt = FALSE)
+```
+
+En algunos casos las nubes pueden quedarse colgadas, ocupando memoria RAM en nuestro ordenador o servidor. Para cerrarlas, deberemos eliminarlas desde la línea de comandos. Para ello, escaneamos los procesos que tengamos abiertos y matamos manualmente el proceso de h2o.
+
+En linux (siéntase libre de utilizar cualquier otro patrón regular para buscar los procesos):
+
+```
+ ps aux | grep <nombre_de_usuario>
+```
+
+Una vez localizado su identificador (por ejemplo, 1173431), lo eliminamos:
+
+``` 
+ kill -9 <num_proceso>
+```
+
+En windows también pueden encontrarse y eliminarse las nubes de H2O en el administrador de tareas (se ven como un proceso de java).
+
+## H2OClassifierModeler
+
+Los modelers de H2O funcionan tanto con datos en formato data.table como en formato H2OFrame. El segundo es ligeramente más eficiente por no tener que subir los datos constantemente para cualquier operación, pero requiere que el usuario gestione la nube de H2O activamente.
+Para el modelo de clasificación, subiremos los datos a la nube de H2O.
+
+```{r start-cloud-for-cls-modeler}
+#Definimos datos comunes para la tarea de clasificación
+c_data.dt <- generateBinaryClassificationData(n_samples = 1000,
+                                              generate_random_weights = FALSE)
+#Definimos particiones train/test
+set.seed(273)
+c_data.keys <- 1:nrow(c_data.dt)
+c_train_size = round(0.8 * nrow(c_data.dt))
+c_smplr <- srsSampler(key = c_data.keys, ssize = c_train_size)
+c_train.keys <- getSample(c_smplr)
+c_test.keys <- setdiff(c_data.keys, c_train.keys)
+head(c_data.dt)
+
+#Iniciamos la nube
+#h2o.init(port = 54322, startH2O = TRUE)
+
+c_data.h2o <- h2o::as.h2o(c_data.dt, destination_frame = "classif_data")
+```
+
+### Instanciado
+
+El H2OClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `model`: Nombre del modelo de H2O a utilizar. Los siguientes están disponibles:
+
+  - `adaBoost` (Clasificación binaria)
+  - `decision_tree` (Clasificación binaria)
+  - `deeplearning`
+  - `gam` (Modelo aditivo generalizado)
+  - `gbm` (Modelo de gradient boosting)
+  - `glm` (Modelo lineal generalizado)
+  - `naiveBayes`
+  - `svm` (Máquina de vectores soporte, Clasificación binaria)
+  - `randomForest`
+  - `rulefit`
+  - `xgboost` (Únicamente funciona en máquinas linux)
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento del modelo escogido. Se recomienda consultar la documentación de H2O para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "classification_target"
+regressors <- setdiff(colnames(c_data.h2o), target)
+params <- list()#Utilizará parámetros predefinidos
+h2o_cls_modeler <- H2OClassifierModeler(model = "randomForest",
+                                        params = params,
+                                        target = target,
+                                        regressors = regressors)
+```
+
+
+### crossValidate
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = h2o_cls_modeler,
+              data = c_data.h2o,#Datos completos
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+h2o_cls_modeler <- train(object = h2o_cls_modeler, data = c_data.h2o, subSet = c_train.keys)
+```
+
+
+### getPredictions
+
+Al predecir, los modelers clasificadores devuelven una matriz de puntuaciones:
+
+```{r}
+preds <- getPredictions(object = h2o_cls_modeler,
+                        data = c_data.h2o,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+Para que nos devuelvan las clases directamente, debemos emplear el método `getClasses`.
+
+A este objeto se le puede especificar un mapeo de clases particular, de los cuales hay:
+
+- `maxScoreClass()`: (predeterminado), escoge la clase con mayor puntuación.
+- `binaryThresholdClass()`: Solo para target binaria. Permite especificar un umbral de selección para la clase positiva.
+
+```{r}
+clss <- getClasses(object = h2o_cls_modeler,
+                   data = c_data.h2o,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+
+clss <- getClasses(object = h2o_cls_modeler,
+                   data = c_data.h2o,
+                   subSet = c_test.keys,
+                   class_mapping = binaryThresholdClass(threshold = 0.65,
+                                                        positive_class = "positive"))
+head(clss)
+```
+
+### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = h2o_cls_modeler,
+         data = c_data.h2o,
+         cost_function = cf,
+         subSet = c_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = h2o_cls_modeler,
+         data = c_data.h2o,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "h2o_cls.mlu"
+modelSave(object = h2o_cls_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.h2o,
+         cost_function = cf,
+         subSet = c_test.keys)
+
+#Cerramos la nube de H2O
+#h2o.shutdown(prompt = FALSE)
+```
+
+**Importante: Si se cierra la nube de H2O antes de guardar el modelo, no lo podremos recuperar, porque se borrarán todos sus contenidos.**
+
+## H2ORegressorModeler
+
+Los modelers de H2O funcionan tanto con datos en formato data.table como en formato H2OFrame. El segundo es ligeramente más eficiente por no tener que subir los datos constantemente para cualquier operación, pero requiere que el usuario gestione la nube de H2O activamente.
+Para el modelo de regresión, no subiremos los datos a la nube de H2O, dejaremos que lo haga el propio modeler de forma automática.
+
+```{r}
+#Definimos datos comunes para la tarea de clasificación
+r_data.dt <- generateRegressionData(n_samples = 1000,
+                                    generate_random_weights = FALSE)
+#Definimos particiones train/test
+set.seed(273)
+r_data.keys <- 1:nrow(r_data.dt)
+r_train_size = round(0.8 * nrow(r_data.dt))
+r_smplr <- srsSampler(key = r_data.keys, ssize = r_train_size)
+r_train.keys <- getSample(r_smplr)
+r_test.keys <- setdiff(r_data.keys, r_train.keys)
+head(r_data.dt)
+
+#Iniciamos la nube
+#h2o.init(port = 54323, startH2O = TRUE)
+
+#r_data.h2o <- h2o::as.h2o(r_data.dt, destination_frame = "reg_data")
+```
+
+### Instanciado
+
+El H2OClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `model`: Nombre del modelo de H2O a utilizar. Los siguientes están disponibles:
+
+  - `deeplearning`
+  - `gam` (Modelo aditivo generalizado)
+  - `gbm` (Modelo de gradient boosting)
+  - `glm` (Modelo lineal generalizado)
+  - `randomForest`
+  - `rulefit`
+  - `xgboost` (Únicamente funciona en máquinas linux)
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento del modelo escogido. Se recomienda consultar la documentación de H2O para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "regression_target"
+regressors <- setdiff(colnames(r_data.dt), target)
+params <- list()#Utilizará parámetros predefinidos
+h2o_reg_modeler <- H2ORegressorModeler(model = "deeplearning",
+                                       params = params,
+                                       target = target,
+                                       regressors = regressors)
+```
+
+### crossValidate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = h2o_reg_modeler,
+              data = r_data.dt,#Datos completos
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+h2o_reg_modeler <- train(object = h2o_reg_modeler, data = r_data.dt, subSet = r_train.keys)
+```
+
+### getPredictions
+
+Al predecir, los modelers regresores devuelven una matriz con las predicciones:
+
+```{r}
+preds <- getPredictions(object = h2o_reg_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = h2o_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = h2o_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "h2o_reg.mlu"
+modelSave(object = h2o_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+
+#Cerramos la nube de H2O
+h2o.shutdown(prompt = FALSE)
+```
+
+**Importante: Si se cierra la nube de H2O antes de guardar el modelo, no lo podremos recuperar, porque se borrarán todos sus contenidos.**
+

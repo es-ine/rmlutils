@@ -1,0 +1,1681 @@
+---
+title: "Tutorial de objetos modeler"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise el tutorial de Sampler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+Este documento tratará únicamente los modelers simples, a excepción de los de H2O,
+que se explicarán en otro tutorial. Del mismo modo, los demás modelers complejos 
+tienen un tutorial asociado cada uno.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## Estructura, tipos y métodos de los modelers
+
+Los modeler son el objeto principal de las librerías MLUtils, pues son los que
+se encargan de entrenar y predecir con los modelos de las diferentes librerías
+(LightGBM, H2O, etc.). Sus nombres siguen la estructura de
+modelo + tarea + "modeler", existiendo los siguientes tipos:
+
+- Regresión:
+    - Modelers simples
+      - `directRegressorModeler`
+      - `HTRegressorModeler`
+      - `strataHTRegressorModeler`
+      - `strataMeanRegressorModeler`
+      - `H2ORegressorModeler`
+      - `LGBRegressorModeler`
+      - `rangerRegressorModeler`
+      - `catboostRegressorModeler`
+      - `miceRegressorModeler`
+    - Modelers complejos
+      - `classifRegRegressorModeler`
+      - `benchRegressorModeler`
+      - `preproRegressorModeler`
+      - `prePredRegressorModeler`
+      - `memoryRegressorModeler`
+- Clasificación
+    - Modelers simples
+      - `H2OClassifierModeler`
+      - `LGBClassifierModeler`
+      - `rangerClassifierModeler`
+      - `catboostClassifierModeler`
+      - `miceClassifierModeler`
+    - Modelers complejos
+      - `preproClassifierModeler`
+
+Todos los modelers tienen un conjunto común de métodos:
+
+- `train`: Entrena un modeler.
+- `crossValidate`: Aplica validación cruzada a un modeler para obtener una
+métrica de su rendimiento definida a partir de una función de coste, pero no lo entrena. (Para más información sobre las funciones de coste, se recomienda revisar su tutorial asociado).
+- `getPredictions`: Obtiene las prediciones del modeler para un conjunto de datos dado. (Para los modelers de clasificación, las predicciones son la matriz de probabilidades/scores, no las clases en sí)
+- `modelSave`: Guarda el modelo en un archivo comprimido.
+- `modelLoad`: Carga un modelo desde un archivo.
+- `evaluate`: Evalúa un modelo entrenado para una función de coste específica.
+
+Y los clasificadores tienen uno adicional:
+
+- `getClasses`: Proporcionan las clases predichas por un modelo entrenado, para
+un conjunto de datos dado.
+
+Los modelers tienen un funcionamiento análogo, independientemente de su tipo.
+En el resto de este tutorial, se desarrollarán la mayoría de modelers simples con
+ejemplos de uso.
+
+## Modelers para clasificación
+
+```{r}
+#Definimos datos comunes para la tarea de clasificación
+c_data.dt <- generateBinaryClassificationData(n_samples = 1000,
+                                              generate_random_weights = FALSE)
+#Definimos particiones train/test
+set.seed(273)
+c_data.keys <- 1:nrow(c_data.dt)
+c_train_size = round(0.8 * nrow(c_data.dt))
+c_smplr <- srsSampler(key = c_data.keys, ssize = c_train_size)
+c_train.keys <- getSample(c_smplr)
+c_test.keys <- setdiff(c_data.keys, c_train.keys)
+head(c_data.dt)
+```
+
+
+### LGBClassifierModeler
+
+Implementación de LightGBM en RMLutils para tareas de clasificación (framework ligero de gradient boosting con modelos basados en árboles).
+
+#### Instalación de lightgbm
+
+Primero, debemos comprobar si la librería `lightgbm` está instalada:
+
+```{r}
+require("lightgbm")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("lightgbm")`.
+
+#### Instanciado
+
+El LGBClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `lgb.train`. Se recomienda consultar la documentación de lightgbm para más información.
+  En el caso de clasificación, el parámetro `objective` puede ser `"multiclass"` (que funciona tanto para target multiclase como binaria) o `"binary"` (únicamente para target binaria).
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+- `positive_class`: (Opcional) Para el caso de `objective = "binary"`, se recomienda especificar el nombre o identificador de la clase positiva, si no, se asumirá el orden según los niveles del factor, siendo el primer nivel la clase negativa y el segundo la positiva.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "classification_target"
+regressors <- setdiff(colnames(c_data.dt), target)
+params <- list(
+  "learning_rate" = 0.07,
+  "nrounds" = 10,
+  "objective" = "binary"
+)
+lgb_cls_modeler <- LGBClassifierModeler(params = params,
+                                        target = target,
+                                        regressors = regressors,
+                                        positive_class = "positive")
+
+#Alternativamente:
+#params <- list(
+#  "learning_rate" = 0.07,
+#  "nrounds" = 10,
+#  "objective" = "multiclass"
+#)
+#lgb_cls_modeler <- LGBClassifierModeler(params = params,
+#                                        target = target,
+#                                        regressors = regressors)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = lgb_cls_modeler,
+              data = c_data.dt,#Datos completos
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+En este caso, para la variable `"classification_target"` se obtiene una precisión perfecta.
+
+#### train
+
+Tras determinar un conjunto de parámetros adecuado con crossValidate, podemos entrenar el modelo escogido.
+
+```{r}
+lgb_cls_modeler <- train(object = lgb_cls_modeler,
+                         data = c_data.dt,
+                         subSet = c_train.keys)
+
+#Alternativamente:
+#lgb_cls_modeler <- train(object = lgb_cls_modeler,
+#                         data = c_data.dt[c_train.keys],
+```
+
+
+#### getPredictions
+
+Al predecir, los modelers clasificadores devuelven una matriz de puntuaciones:
+
+```{r}
+preds <- getPredictions(object = lgb_cls_modeler,
+                        data = c_data.dt,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+Para que nos devuelvan las clases directamente, debemos emplear el método `getClasses`.
+
+A este objeto se le puede especificar un mapeo de clases particular, de los cuales hay:
+
+- `maxScoreClass()`: (predeterminado), escoge la clase con mayor puntuación.
+- `binaryThresholdClass()`: Solo para target binaria. Permite especificar un umbral de selección para la clase positiva.
+
+```{r}
+clss <- getClasses(object = lgb_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+
+clss <- getClasses(object = lgb_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = binaryThresholdClass(threshold = 0.8,
+                                                        positive_class = "positive"))
+#Al especificar un umbral tan elevado para la clase positiva, las predicciones pasan a ser "negative"
+head(clss)
+```
+
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = lgb_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = lgb_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "lgb_cls.mlu"
+modelSave(object = lgb_cls_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+
+### rangerClassifierModeler
+
+Implementación de ranger en RMLutils para tareas de clasificación. Una implementación rápida de Random Forest para R.
+
+#### Instalación de ranger
+
+Primero, debemos comprobar si la librería `ranger` está instalada:
+
+```{r}
+require("ranger")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("ranger")`.
+
+#### Instanciado
+
+El rangerClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `ranger``. Se recomienda consultar la documentación de ranger para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "classification_target"
+regressors <- setdiff(colnames(c_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 10
+)
+#Instanciamos el modelo
+ranger_cls_modeler <- rangerClassifierModeler(params = params,
+                                              target = target,
+                                              regressors = regressors)
+```
+
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = ranger_cls_modeler,
+              data = c_data.dt,#Datos completos
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+Tras determinar un conjunto de parámetros adecuado con crossValidate, podemos entrenar el modelo escogido.
+
+```{r}
+ranger_cls_modeler <- train(object = ranger_cls_modeler,
+                            data = c_data.dt,
+                            subSet = c_train.keys)
+```
+
+#### getPredictions
+
+Al predecir, los modelers clasificadores devuelven una matriz de puntuaciones:
+
+```{r}
+preds <- getPredictions(object = ranger_cls_modeler,
+                        data = c_data.dt,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+Para que nos devuelvan las clases directamente, debemos emplear el método `getClasses`.
+
+A este objeto se le puede especificar un mapeo de clases particular, de los cuales hay:
+
+- `maxScoreClass()`: (predeterminado), escoge la clase con mayor puntuación.
+- `binaryThresholdClass()`: Solo para target binaria. Permite especificar un umbral de selección para la clase positiva.
+
+```{r}
+clss <- getClasses(object = ranger_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+
+clss <- getClasses(object = ranger_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = binaryThresholdClass(threshold = 0.95,
+                                                        positive_class = "positive"))
+#Al especificar un umbral tan elevado para la clase positiva, algunas predicciones pasan a ser "negative"
+head(clss)
+```
+
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = ranger_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = ranger_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "ranger_cls.mlu"
+modelSave(object = ranger_cls_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### catboostClassifierModeler
+
+Implementación de catboost en RMLutils para tareas de clasificación (librería de código abierto para gradient boosting sobre árboles de decisión, con soporte integrado para variables categóricas).
+
+#### Instalación de catboost
+
+Primero, debemos comprobar si la librería `catboost` está instalada:
+
+```{r}
+require("catboost")
+```
+
+A diferencia de los demás paquetes, catboost no está en el repositorio del CRAN,
+con lo que para instalarlo debermos seguir las instrucciones en este [enlace](https://catboost.ai/docs/en/concepts/r-installation). Si no nos funcionara,
+se recomienda descargarse la librería comprimida (el archivo tar.gz), descomprimirla y ejecutar el siguiente comando:
+
+```
+install.packages("/ruta/a/carpeta/descomprimida", 
+repos = NULL, 
+type = "source",
+INSTALL_opts = c("--no-multiarch"))
+```
+Algunas versiones recientes pueden no funcionar, en dicho caso, recomendamos descargar una versión más antigua y comprobar que existe la carpeta DESCRIPTION en la carpeta descomprimida. Nuestro testeo se realizó mayormente en la versión 1.2.8 de catboost para windows.
+
+#### Instanciado
+
+El catboostClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `catboost.train`. Se recomienda consultar la documentación de catboost para más información.
+  En el caso de clasificación, el parámetro `objective` puede ser `"MultiClass"/"MultiClassOneVsAll"` (que funciona tanto para target multiclase como binaria) o `"logloss"/"CrossEntropy"` (únicamente para target binaria).
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+- `val_data`: Conjunto de datos de validación para utilizar durante el entrenamiento.
+
+- `positive_class`: (Opcional) Para el caso de `objective = "logloss"` o `objective = "CrossEntropy"`, se recomienda especificar el nombre o identificador de la clase positiva, si no, se asumirá el orden según los niveles del factor, siendo el primer nivel la clase negativa y el segundo la positiva.
+
+- `ntree_start`: Parámetro adicional para el predict de catboost. 0 de forma predeterminada.
+
+- `ntree_end`: Parámetro adicional para el predict de catboost. 0 de forma predeterminada.
+
+- `thread_count`: Parámetro adicional para el predict de catboost. -1 de forma predeterminada.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "classification_target"
+regressors <- setdiff(colnames(c_data.dt), target)
+params <- list(
+  #loss_function = 'MultiClass',
+  #loss_function = 'MultiClassOneVsAll',
+  loss_function = 'Logloss',#Binary
+  #loss_function = 'CrossEntropy',#Binary
+  iterations = 50,
+  metric_period=10)
+#Instanciamos el modelo
+catboost_cls_modeler <- catboostClassifierModeler(params = params,
+                                                  target = target,
+                                                  regressors = regressors,
+                                                  positive_class = "positive")
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = catboost_cls_modeler,
+              data = c_data.dt,#Datos completos
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+Tras determinar un conjunto de parámetros adecuado con crossValidate, podemos entrenar el modelo escogido.
+
+```{r}
+catboost_cls_modeler <- train(object = catboost_cls_modeler,
+                              data = c_data.dt,
+                              subSet = c_train.keys)
+```
+
+#### getPredictions
+
+Al predecir, los modelers clasificadores devuelven una matriz de puntuaciones:
+
+```{r}
+preds <- getPredictions(object = catboost_cls_modeler,
+                        data = c_data.dt,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+Para que nos devuelvan las clases directamente, debemos emplear el método `getClasses`.
+
+A este objeto se le puede especificar un mapeo de clases particular, de los cuales hay:
+
+- `maxScoreClass()`: (predeterminado), escoge la clase con mayor puntuación.
+- `binaryThresholdClass()`: Solo para target binaria. Permite especificar un umbral de selección para la clase positiva.
+
+```{r}
+clss <- getClasses(object = catboost_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+
+clss <- getClasses(object = catboost_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = binaryThresholdClass(threshold = 0.95,
+                                                        positive_class = "positive"))
+#Al especificar un umbral elevado para la clase positiva, las clases predichas se quedan igual, porque el modelo predice las clases con mucha confianza (puntuación cercana a 1)
+head(clss)
+```
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = catboost_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = catboost_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "catboost_cls.mlu"
+modelSave(object = catboost_cls_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### miceClassifierModeler
+
+Implementación de MICE (Multivariate Imputation by Chained Equations) en RMLutils para tareas de clasificación. Pese a que originalmente está ideado para imputación de datos faltantes, puede ser adaptado para tareas de predicción.
+
+**Importante: el output de mice es estocástico. Esto quiere decir que aunque se entrene y prediga sobre un mismo conjunto de datos su output será, en general, distinto. El usuario debe tener esto en cuenta a la hora de utilizarlo.**
+
+#### Instalación de mice
+
+Primero, debemos comprobar si la librería `mice` está instalada:
+
+```{r}
+require("mice")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("mice")`.
+
+#### Instanciado
+
+El miceClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de `mice`. Se recomienda consultar la documentación de mice para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "classification_target"
+regressors <- setdiff(colnames(c_data.dt), target)
+params <- list(m = 1,
+               method = "rf",
+               print = FALSE)
+#Instanciamos el modelo
+mice_cls_modeler <- miceClassifierModeler(params = params,
+                                          target = target,
+                                          regressors = regressors)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = mice_cls_modeler,
+              data = c_data.dt,#Datos completos
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+Tras determinar un conjunto de parámetros adecuado con crossValidate, podemos entrenar el modelo escogido.
+
+```{r}
+mice_cls_modeler <- train(object = mice_cls_modeler,
+                          data = c_data.dt,
+                          subSet = c_train.keys)
+```
+
+#### getPredictions
+
+Al predecir, el modelo clasificador de mice devuelve una matriz sparse de unos y ceros, ya que no puede devolver puntuaciones:
+
+```{r}
+preds <- getPredictions(object = mice_cls_modeler,
+                        data = c_data.dt,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+Para que nos devuelvan las clases directamente, debemos emplear el método `getClasses`.
+
+```{r}
+clss <- getClasses(object = mice_cls_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+```
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- accuracyCostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = mice_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = mice_cls_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "mice_cls.mlu"
+modelSave(object = mice_cls_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+## Modelers para regresión
+
+```{r}
+#Definimos datos comunes para la tarea de regresión
+r_data.dt <- generateRegressionData(n_samples = 1000,
+                                    generate_random_weights = FALSE)
+
+#Definimos particiones train/test
+set.seed(273)
+r_data.keys <- 1:nrow(r_data.dt)
+r_train_size = round(0.8 * nrow(r_data.dt))
+r_smplr <- srsSampler(key = r_data.keys, ssize = r_train_size)
+r_train.keys <- getSample(r_smplr)
+r_test.keys <- setdiff(r_data.keys, r_train.keys)
+head(r_data.dt)
+```
+
+
+### directRegressorModeler
+
+Un modeler de imputación directa que escala una variable proto-target (asumida cercana a target) con un factor a especificar por el usuario. No requiere de entrenamiento.
+
+```{r}
+#Definimos un protoTarget sobre los datos que tenemos
+drm_data.dt <- copy(r_data.dt)
+
+#Calculamos la mediana de la variable target según el valor de la variable "cat_3" en el conjunto train
+median_by_cat3.dt <- drm_data.dt[r_train.keys, .(proto_target = median(regression_target)), by = c("cat_3")]
+
+#Juntamos con el conjunto de datos original
+#El proto_target es la mediana según el valor de cat_3 sobre una muestra de los datos
+drm_data.dt <- merge(drm_data.dt, median_by_cat3.dt, by = c("cat_3"))
+```
+
+
+#### Instanciado
+
+Para instanciar un directRegressorModeler se requieren los siguientes argumentos:
+
+- `protoTarget`: Nombre de la variable proto-target.
+
+- `scaleFactor`: Factor de escala que aplicar sobre protoTarget. Se toma 1 de forma predeterminada.
+
+- `target`: Nombre de la variable target.
+
+```{r}
+#Asumimos un scaleFactor de 1, con lo que nuestro modelo simplemente devuelve protoTarget
+d_reg_modeler <- directRegressorModeler(protoTarget = "proto_target",
+                                        scaleFactor = 1,
+                                        target = "regression_target")
+```
+
+
+#### getPredictions
+
+Los modelos regresores devuelven una matriz con las predicciones.
+
+```{r}
+preds <- getPredictions(object = d_reg_modeler,
+                        data = drm_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = d_reg_modeler,
+         data = drm_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = d_reg_modeler,
+         data = drm_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "drm_reg.mlu"
+modelSave(object = d_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = drm_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### HTRegressorModeler
+
+Un modeler de regresión que asume que la variable target es aproximadamente proporcional a su peso muestral.
+
+```{r}
+#Definimos unos datos apropiados para este modeler
+set.seed(273)
+ht_data.dt <- generateStratifiedDomainEstimateData(n_samples = 100, generate_random_weights = FALSE)
+#Se selecciona una variable y se definen pesos muestrales proporcionales a su tamaño
+ht_data.dt <- ht_data.dt[, c("income"), with = FALSE]
+#Tamaño muestral
+n <- round(0.5 * nrow(ht_data.dt))
+#Variables con pi >= 1 modifican su probabilidad de selección a 1
+ht_data.dt[, pi := n*income/sum(income)]
+ht_data.dt[, pi := ifelse(pi >= 1, 1, pi)]
+#Definición de pesos muestrales
+ht_data.dt[, weights := 1/pi]
+head(ht_data.dt)
+#Se toma una muestra proporcional a sus probabilidades de selección
+ht_data.keys <- 1:nrow(ht_data.dt)
+ht_train.keys <- sample(x = ht_data.keys, size = n, replace = FALSE, prob = ht_data.dt[, pi])
+ht_test.keys <- setdiff(ht_data.keys, ht_train.keys)
+```
+
+
+#### Instanciado
+
+Para instanciar HTRegressorModeler se requieren los siguientes argumentos:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales.
+- `target`: Nombre de la variable target.
+
+```{r}
+target <- "income"
+weights_column <- "weights"
+
+#Definición del modeler
+ht_reg_modeler <- HTRegressorModeler(target = target, weightsColumn = weights_column)
+```
+
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds. (Aunque es discutible su utilidad para este modelo).
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = ht_reg_modeler,
+              data = ht_data.dt,#Datos completos
+              CVSampler = cvSampler(key = ht_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+ht_reg_modeler <- train(object = ht_reg_modeler,
+                        data = ht_data.dt,
+                        subSet = ht_train.keys)
+```
+
+#### getPredictions
+
+Los modelos regresores devuelven una matriz con las predicciones.
+
+```{r}
+preds <- getPredictions(object = ht_reg_modeler,
+                        data = ht_data.dt,
+                        subSet = ht_test.keys)
+head(preds)
+#Comparamos con los valores reales
+matrix(head(ht_data.dt[ht_test.keys, income]))
+```
+
+#### evaluate
+
+Esta función es una interfaz común para todos los modelers a la hora de evaluar su funcionamiento para una función de coste y un conjunto de datos específicos:
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = ht_reg_modeler,
+         data = ht_data.dt,
+         cost_function = cf,
+         subSet = ht_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = ht_reg_modeler,
+         data = ht_data.dt,
+         cost_function = cf,
+         subSet = ht_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "ht_reg.mlu"
+modelSave(object = ht_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = ht_data.dt,
+         cost_function = cf,
+         subSet = ht_test.keys)
+```
+
+### strataHTRegressorModeler
+
+Versión de HTRegressorModeler para casos con datos estratificados.
+
+```{r}
+#Definimos unos datos apropiados para este modeler
+set.seed(273)
+str_ht_data.dt <- generateStratifiedDomainEstimateData(n_samples = 100, generate_random_weights = FALSE)
+#Se selecciona una variable y se definen pesos muestrales proporcionales a su tamaño
+str_ht_data.dt <- str_ht_data.dt[, c("income", "strata_class"), with = FALSE]
+#Tamaño muestral
+n <- round(0.5 * nrow(str_ht_data.dt))
+#Variables con pi >= 1 modifican su probabilidad de selección a 1
+str_ht_data.dt[, pi := n*income/sum(income)]
+str_ht_data.dt[, pi := ifelse(pi >= 1, 1, pi)]
+#Definición de pesos muestrales
+str_ht_data.dt[, weights := 1/pi]
+head(str_ht_data.dt)
+#Se toma una muestra proporcional a sus probabilidades de selección
+str_ht_data.keys <- 1:nrow(str_ht_data.dt)
+str_ht_train.keys <- sample(x = str_ht_data.keys, size = n, replace = FALSE, prob = str_ht_data.dt[, pi])
+str_ht_test.keys <- setdiff(str_ht_data.keys, str_ht_train.keys)
+```
+
+#### Instanciado
+
+Para instanciar strataHTRegressorModeler se requieren los siguientes argumentos:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales.
+- `target`: Nombre de la variable target.
+- `strata`: Nombre de la columna de estratificación.
+
+```{r}
+target <- "income"
+weights_column <- "weights"
+strata_column <- "strata_class"
+
+str_ht_reg_modeler <- strataHTRegressorModeler(weightsColumn = weights_column,
+                                               target = target,
+                                               strata = strata_column)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds. (Aunque es discutible su utilidad para este modelo, salvo si se toman distintas columnas para la estratificación).
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = str_ht_reg_modeler,
+              data = str_ht_data.dt,#Datos completos
+              CVSampler = cvSampler(key = str_ht_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+str_ht_reg_modeler <- train(object = str_ht_reg_modeler,
+                            data = str_ht_data.dt,
+                            subSet = str_ht_train.keys)
+```
+
+#### getPredictions
+
+Los modelos regresores devuelven una matriz con las predicciones.
+
+```{r}
+preds <- getPredictions(object = str_ht_reg_modeler,
+                        data = str_ht_data.dt,
+                        subSet = str_ht_test.keys)
+head(preds)
+#Comparamos con los valores reales
+matrix(head(str_ht_data.dt[str_ht_test.keys, income]))
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = str_ht_reg_modeler,
+         data = str_ht_data.dt,
+         cost_function = cf,
+         subSet = str_ht_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = str_ht_reg_modeler,
+         data = str_ht_data.dt,
+         cost_function = cf,
+         subSet = str_ht_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "str_ht_reg.mlu"
+modelSave(object = str_ht_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = str_ht_data.dt,
+         cost_function = cf,
+         subSet = str_ht_test.keys)
+```
+
+### strataMeanRegressorModeler
+
+Un modeler de regresión sencillo que devuelve el promedio del target según varios regresores utilizados como variables de estratificación. Los regresores deben ser variables categóricas.
+
+```{r}
+#Definimos datos apropiados para este modeler
+smr_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000,
+                                                             generate_random_weights = TRUE)
+head(smr_data.dt)
+
+#Definimos particiones de train y test
+smr_data.keys <- 1:nrow(smr_data.dt)
+train_size = round(0.8 * nrow(smr_data.dt))
+smplr <- srsSampler(key = smr_data.keys, ssize = train_size)
+smr_train.keys <- getSample(smplr)
+smr_test.keys <- setdiff(smr_data.keys, smr_train.keys)
+```
+
+
+#### Instanciado
+
+El strataMeanRegressorModeler requiere de los siguientes argumentos para instanciarse:
+
+- `target`: Nombre de la variable objetivo.
+- `regressors`: Vector con los nombres de las variables de estratificación.
+- `weightsColumn`: Nombre de la columna de pesos muestrales.
+
+```{r}
+target <- "income"# Regression
+weightsColumn <- "weights"
+regressors <- c("strata_class", "domain_class")#Only categorical variables
+
+#Instanciamos el modelo
+sm_reg_modeler <- strataMeanRegressorModeler(target = target,
+                                             regressors = regressors,
+                                             weightsColumn = "weights")
+
+```
+
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds. (Aunque es discutible su utilidad para este modelo, salvo si se toman distintas columnas para la estratificación).
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = sm_reg_modeler,
+              data = smr_data.dt,#Datos completos
+              CVSampler = cvSampler(key = smr_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+sm_reg_modeler <- train(object = sm_reg_modeler,
+                            data = smr_data.dt,
+                            subSet = smr_train.keys)
+```
+
+#### getPredictions
+
+Los modelos regresores devuelven una matriz con las predicciones.
+
+```{r}
+preds <- getPredictions(object = sm_reg_modeler,
+                        data = smr_data.dt,
+                        subSet = smr_test.keys)
+head(preds)
+#Comparamos con los valores reales
+matrix(head(smr_data.dt[smr_test.keys, income]))
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = sm_reg_modeler,
+         data = smr_data.dt,
+         cost_function = cf,
+         subSet = smr_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = sm_reg_modeler,
+         data = smr_data.dt,
+         cost_function = cf,
+         subSet = smr_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "sm_reg.mlu"
+modelSave(object = sm_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = smr_data.dt,
+         cost_function = cf,
+         subSet = smr_test.keys)
+```
+
+### LGBRegressorModeler
+
+Implementación de LightGBM en RMLutils para tareas de regresión (framework ligero de gradient boosting con modelos basados en árboles).
+
+#### Instalación de lightgbm
+
+Primero, debemos comprobar si la librería `lightgbm` está instalada:
+
+```{r}
+require("lightgbm")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("lightgbm")`.
+
+#### Instanciado
+
+El LGBClassifierModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `lgb.train`. Se recomienda consultar la documentación de lightgbm para más información.
+  En el caso de regresión, el parámetro `objective` debe ser `"regression"`.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "regression_target"
+regressors <- setdiff(colnames(r_data.dt), target)
+params <- list(
+  "learning_rate" = 0.07,
+  "nrounds" = 10,
+  "objective" = "regression"
+)
+lgb_reg_modeler <- LGBRegressorModeler(params = params,
+                                       target = target,
+                                       regressors = regressors)
+
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = lgb_reg_modeler,
+              data = r_data.dt,#Datos completos
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+lgb_reg_modeler <- train(object = lgb_reg_modeler,
+                         data = r_data.dt,
+                         subSet = r_train.keys)
+```
+
+#### getPredictions
+
+Los modelos regresores devuelven una matriz con las predicciones.
+
+```{r}
+preds <- getPredictions(object = lgb_reg_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = lgb_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = lgb_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "lgb_reg.mlu"
+modelSave(object = lgb_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### rangerRegressorModeler
+
+Implementación de ranger en RMLutils para tareas de regresión. Una implementación rápida de Random Forest para R.
+
+#### Instalación de ranger
+
+Primero, debemos comprobar si la librería `ranger` está instalada:
+
+```{r}
+require("ranger")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("ranger")`.
+
+#### Instanciado
+
+El rangerRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `ranger``. Se recomienda consultar la documentación de ranger para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "regression_target"
+regressors <- setdiff(colnames(r_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 10
+)
+#Instanciamos el modelo
+ranger_reg_modeler <- rangerRegressorModeler(params = params,
+                                             target = target,
+                                             regressors = regressors)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = ranger_reg_modeler,
+              data = r_data.dt,#Datos completos
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+ranger_reg_modeler <- train(object = ranger_reg_modeler,
+                            data = r_data.dt,
+                            subSet = r_train.keys)
+```
+
+#### getPredictions
+
+```{r}
+preds <- getPredictions(object = ranger_reg_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = ranger_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = ranger_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "ranger_reg.mlu"
+modelSave(object = ranger_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### catboostRegressorModeler
+
+Implementación de catboost en RMLutils para tareas de regresión (librería de código abierto para gradient boosting sobre árboles de decisión, con soporte integrado para variables categóricas).
+
+#### Instalación de catboost
+
+Primero, debemos comprobar si la librería `catboost` está instalada:
+
+```{r}
+require("catboost")
+```
+
+A diferencia de los demás paquetes, catboost no está en el repositorio del CRAN,
+con lo que para instalarlo debermos seguir las instrucciones en este [enlace](https://catboost.ai/docs/en/concepts/r-installation). Si no nos funcionara,
+se recomienda descargarse la librería comprimida (el archivo tar.gz), descomprimirla y ejecutar el siguiente comando:
+
+```
+install.packages("/ruta/a/carpeta/descomprimida", 
+repos = NULL, 
+type = "source",
+INSTALL_opts = c("--no-multiarch"))
+```
+Algunas versiones recientes pueden no funcionar, en dicho caso, recomendamos descargar una versión más antigua y comprobar que existe la carpeta DESCRIPTION en la carpeta descomprimida. Nuestro testeo se realizó mayormente en la versión 1.2.8 de catboost para windows.
+
+#### Instanciado
+
+El catboostRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de   `catboost.train`. Se recomienda consultar la documentación de catboost para más información.
+  En el caso de regresión, el parámetro `objective` puede tomar múltiples valores, como `"RMSE"`, `"MAE"`, `"MAPE"`, etc.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+- `val_data`: Conjunto de datos de validación para utilizar durante el entrenamiento.
+
+- `ntree_start`: Parámetro adicional para el predict de catboost. 0 de forma predeterminada.
+
+- `ntree_end`: Parámetro adicional para el predict de catboost. 0 de forma predeterminada.
+
+- `thread_count`: Parámetro adicional para el predict de catboost. -1 de forma predeterminada.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "regression_target"
+regressors <- setdiff(colnames(r_data.dt), target)
+params <- list(
+  loss_function = 'RMSE',
+  iterations = 50,
+  metric_period=10)
+#Instanciamos el modelo
+catboost_reg_modeler <- catboostRegressorModeler(params = params,
+                                                 target = target,
+                                                 regressors = regressors)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = catboost_reg_modeler,
+              data = r_data.dt,#Datos completos
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+catboost_reg_modeler <- train(object = catboost_reg_modeler,
+                              data = r_data.dt,
+                              subSet = r_train.keys)
+```
+
+#### getPredictions
+
+```{r}
+preds <- getPredictions(object = catboost_reg_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = catboost_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = catboost_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "catboost_reg.mlu"
+modelSave(object = catboost_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### miceRegressorModeler
+
+Implementación de MICE (Multivariate Imputation by Chained Equations) en RMLutils para tareas de regresión. Pese a que originalmente está ideado para imputación de datos faltantes, puede ser adaptado para tareas de predicción.
+
+**Importante: el output de mice es estocástico. Esto quiere decir que aunque se entrene y prediga sobre un mismo conjunto de datos su output será, en general, distinto. El usuario debe tener esto en cuenta a la hora de utilizarlo.**
+
+#### Instalación de mice
+
+Primero, debemos comprobar si la librería `mice` está instalada:
+
+```{r}
+require("mice")
+```
+
+Si no lo estuviera, podemos instalarla fácilmente desde el CRAN,
+mediante el comando `install.packages("mice")`.
+
+#### Instanciado
+
+El miceRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `params`: lista con nombres de los parámetros necesarios para el funcionamiento de `mice`. Se recomienda consultar la documentación de mice para más información.
+
+- `target`: Nombre de la variable objetivo en el conjunto de datos.
+
+- `regressors`: Vector de strings indicando los nombres de las columnas a utilizar como variables para la tarea de clasificación.
+
+```{r}
+#Definimos los parámetros del modelo
+target <- "regression_target"
+regressors <- setdiff(colnames(r_data.dt), target)
+params <- list(m = 1,
+               method = "rf",
+               print = FALSE)
+#Instanciamos el modelo
+mice_reg_modeler <- miceRegressorModeler(params = params,
+                                          target = target,
+                                          regressors = regressors)
+```
+
+#### crossValidate
+
+`crossValidate` devuelve el coste promediado para todos los folds.
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = mice_reg_modeler,
+              data = r_data.dt,#Datos completos
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+#### train
+
+```{r}
+mice_reg_modeler <- train(object = mice_reg_modeler,
+                          data = r_data.dt,
+                          subSet = r_train.keys)
+```
+
+#### getPredictions
+
+```{r}
+preds <- getPredictions(object = mice_reg_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+#### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- MSECostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = mice_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = mice_reg_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+#### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "mice_reg.mlu"
+modelSave(object = catboost_reg_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+## Uso de expandHyperParams
+
+Esta es una función de utilidad para generar conjuntos de hiperparámetros para nuestros modelos. Es particularmente adecuada cuando queremos aplicar validación cruzada sobre múltiples modelos con hiperparámetros distintos.
+
+A continuación, aplicaremos un proceso de búsqueda de hiperparámetros óptimos para un problema de regresión con `rangerRegressorModeler`:
+
+```{r}
+#Definimos los datos
+data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 5000,
+                                                             generate_random_weights = FALSE)
+
+#Definimos las particiones de train/test
+set.seed(273)
+data.keys <- 1:nrow(data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+head(data.dt)
+
+#Definimos conjunto de hiperparámetros que queremos testear
+target <- "target"
+regressors <- setdiff(colnames(data.dt), target)
+hyperparams <- list(
+  "num.trees" = c(10, 25, 50),
+  "max.depth" = c(5, 10),
+  "replace" = c(TRUE, FALSE),
+  "alpha" = seq(0,1,0.1)
+)
+
+#Llamamos a la función expandHyperParams para generar todas las combinaciones
+combinations <- expandHyperParams(hyperparams)
+#Combinaciones totales:
+print(paste0("Combinaciones totales: ", length(combinations)))
+
+#Elegimos los hiperparámetros que minimicen el MSE en el entrenamiento aplicando validación cruzada
+cf <- MSECostFunction()
+n_folds <- 5
+min_mse_idx <- NA
+min_mse <- Inf
+for (i in 1:length(combinations)){
+
+  #Definimos modeler con la combinación de hiperparámetros actual
+  modeler <- rangerRegressorModeler(params = combinations[[i]],
+                                    target = target,
+                                    regressors = regressors)
+  #Aplicamos validación cruzada sobre el conjunto de entrenamiento
+  cost <- crossValidate(modeler = modeler,
+                        data = data.dt,#Datos completos
+                        CVSampler = cvSampler(key = train.keys, folds = n_folds),
+                        costFunction = cf)
+   if(cost$target < min_mse){
+     min_mse_idx <- i
+     min_mse <- cost$target
+   }
+}
+print("Mejores hiperparámetros: ")
+print(combinations[[min_mse_idx]])
+print("Mejor MSE:")
+print(min_mse)
+
+#Entrenamos rangerRegressorModeler con esos hiperparámetros y
+#el conjunto de entrenamiento completo
+modeler <- rangerRegressorModeler(params = combinations[[min_mse_idx]],
+                                  target = target,
+                                  regressors = regressors)
+modeler <- train(object = modeler,
+                 data = data.dt,
+                 subSet = train.keys)
+
+#Evaluamos sobre el conjunto de entrenamiento y sobre test
+#Evaluación sobre el conjunto de train
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+
+#Comparamos con la función de coste de R^2
+cf2 <- r2CostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = test.keys)
+```
+
+Podemos ver que el modelo se ajusta razonablemente bien a los datos, y que la mayor parte de la varianza de los datos es explicada con la modelización.
+

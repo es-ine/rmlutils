@@ -1,0 +1,206 @@
+---
+title: "prePredModeler tutorial"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+It is recommended that the user reviews the Sampler and Modeler tutorials before reading this document.
+
+The user is reminded that all RMLutils methods and functions are
+documented. Using the help tab, or the command itself, essential documentation
+can be obtained for any object or function.
+
+**Additionally, it is important to emphasize that, to use most modelers, the user will be responsible for installing the specific library they use. To keep a lightweight installation, RMLutils does not install any of the machine learning libraries used by the modelers.**
+
+## The prePredRegressorModeler object
+
+This object is one of the complex modelers in RMLutils. It is a two-step model (also known as a chain model), which internally uses two regression modelers, called predModeler and mainModeler.
+
+The predModeler is responsible for predicting a target variable (or multiple ones) which the mainModeler then incorporates into its regressors for the main prediction.
+
+```{r}
+# Generate a dataset
+data.dt <- generateRegressionData(n_samples = 1000, generate_random_weights = FALSE)
+# Create an additional column that depends on regression_target, which will be the target variable of the modeler
+data.dt[, main_regression_target := regression_target + float_1 - float_2]
+
+# Define train and test partitions
+set.seed(273)
+data.keys <- 1:nrow(data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+```
+
+### Instantiation
+
+The prePredRegressorModeler requires the following parameters to be instantiated:
+
+- `predModeler`: A univariate or multivariate modeler to generate the additional regressor(s) that mainModeler will use for its prediction task.
+
+- `mainModeler`: The main modeler. It will use the predictions from predModeler together with other regressors to predict the target variable.
+
+For this tutorial, ranger modelers will be used to define the prePredModeler. The user should check that the `ranger` library is installed.
+
+We define the previous model and the main one:
+
+```{r}
+# Define the previous modeler (this will have regression_target as target variable)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+target <- "regression_target"
+regressors <- setdiff(colnames(data.dt), c(target, "main_regression_target"))
+
+predModeler <- rangerRegressorModeler(params = params,
+                                      target = target,
+                                      regressors = regressors)
+
+# Define the main modeler
+# This will predict main_regression_target, taking regression_target as an additional regressor
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+target <- "main_regression_target"
+regressors <- setdiff(colnames(data.dt), c(target))
+
+mainModeler <- rangerRegressorModeler(params = params,
+                                      target = target,
+                                      regressors = regressors)
+```
+
+Now we define the prePredModeler:
+
+```{r}
+prePredModeler <- prePredRegressorModeler(predModeler = predModeler,
+                                          mainModeler = mainModeler)
+```
+
+
+### crossValidate
+
+```{r}
+# Define a cost function
+cf <- r2CostFunction()
+# Apply cross-validation on the training set
+crossValidate(modeler = prePredModeler,
+              data = data.dt, # Complete data
+              CVSampler = cvSampler(key = train.keys, folds = 3), # cvSampler on training keys
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+prePredModeler <- train(prePredModeler,
+                        data = data.dt,
+                        subSet = train.keys)
+```
+
+### getPredictions
+
+```{r}
+preds <- getPredictions(object = prePredModeler,
+                        data = data.dt,
+                        subSet = test.keys)
+head(preds)
+```
+
+### evaluate
+
+Since this modeler contains two other modelers, we may want to evaluate the final output, or evaluate both modelers at the same time. The evaluate method allows us to specify a regression cost function (which will evaluate only the final output), or a named list with cost functions to specify the cost function with which to evaluate each of the internal modelers:
+
+```{r}
+# Define a cost function
+cf <- r2CostFunction()
+# Evaluation on the training set
+evaluate(object = prePredModeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = train.keys)
+# Evaluation on the test set
+evaluate(object = prePredModeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+
+
+# Evaluation of both modelers separately
+cf2 <- list("predModeler" = r2CostFunction(),
+            "mainModeler" = r2CostFunction())
+
+
+# Evaluation on the training set for both modelers
+evaluate(object = prePredModeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = train.keys)
+# Evaluation on the test set for both modelers
+evaluate(object = prePredModeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+# Define a save path and a file name
+m_path <- "./trained_modelers"
+m_filename <- "pre_pred_reg.mlu"
+modelSave(object = prePredModeler,
+          path = m_path,
+          fileName = m_filename)
+
+# Load the model again and check that it works
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```
+

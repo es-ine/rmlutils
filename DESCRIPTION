@@ -1,0 +1,18 @@
+Package: RMLutils
+Type: Package
+Title: Machine Learning Utilities for Official Statistics
+Version: 1.0.0
+Author: Luis Sanguiao, Carlos Sáez, Sandra Barragán, Esther Puerto, María Novás, Sergio Pardina, Álvaro García, Miguel Anguita, Jordi Verdú, Juan Ródenas, Beatriz Abad.
+Maintainer: Luis Sanguiao <luis.sanguiao.sande@ine.es>
+Description: 
+    Package of OOP functions for developing official statistics and standarizing the code used for implementing statistical research and production.
+License: EUPL
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
+Imports:
+      data.table,
+      zip
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

@@ -1,0 +1,452 @@
+---
+title: "Tutorial de estimadores"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## Las funciones estimadoras y sus tipos
+
+En RMLutils, las funciones estimadoras permiten obtener la estimación del total poblacional y la varianza de la estimación para un conjunto de datos y un diseño muestral dado.
+
+Existen los siguientes tipos:
+
+- `HTEstimate`
+- `HTDomainEstimate`
+- `REstimate`
+- `RDomainEstimate`
+- `MCSubRBEstimate`
+- `MCSubRBDomainEstimate`
+- `preTrainedEstimate`
+- `preTrainedDomainEstimate`
+
+Definimos los conjuntos de datos a utilizar para todas las estimaciones.
+
+```{r}
+#Datos simples para estimación
+data.dt <- generateEstimateData(n_samples = 1000,
+                                generate_random_weights = FALSE)
+head(data.dt)
+
+#Datos estratificados para estimación
+st_data.dt <- generateStratifiedEstimateData(n_samples = 1000,
+                                             generate_random_weights = FALSE)
+head(st_data.dt)
+
+#Datos estratificados y por dominios
+std_ma_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000,
+                                                                    generate_random_weights = FALSE)
+head(std_ma_data.dt)
+```
+
+El primer conjunto de datos consiste en tres columnas, donde cada una de ellas sigue una distribución normal de distintos parámetros:
+
+- `Target_1` sigue una $\mathcal{N}(10,2)$
+- `Target_2` sigue una $\mathcal{N}(-20, 10)$
+- `Target_3` sigue una $\mathcal{N}(0,5)$
+
+El segundo conjunto de datos tiene las mismas variables objetivo, pero se añade una columna de estrato y una dependencia distinta de cada variable objetivo en cada uno de los estratos. Para mayor información se recomienda consultar con el comando `help(generateStratifiedEstimateData)`.
+
+El tercer conjunto de datos tiene una columna de estrato (urban/rural) y una columna indicando el dominio (Province_1/Province_2/Province_3). La variable `income` tiene una distribución lognormal de parámetros 8 y 0.5, cuyo valor escala según el estrato. Por otra parte, `cost_of_living` sigue una normal de parámetros 1000 y 200, cuyo valor escala según el dominio. La variable target se calcula como la resta de las dos anteriores variables y se le añade ruido proporcional a la desviación estándar en cada combinación de estrato y dominio.
+
+## Estimadores simples
+
+### HTEstimate
+
+El estimador de Horvitz-Thompson emplea cálculos distintos según el diseño muestral que se le proporcione. Actualmente tiene funcionalidad implementada para el muestreo aleatorio simple y para el estratificado.
+
+```{r}
+#Definimos un sampler a partir de las claves del primer conjunto de datos
+set.seed(273)
+key <- 1:nrow(data.dt)
+srsmplr <- srsSampler(key = key, ssize = 800)
+sample_1 <- getSample(srsmplr)
+
+#Llamamos a la función para obtener una estimación
+estim <- HTEstimate(object = srsmplr,
+                    sampleKeys = sample_1,
+                    sampleData = data.dt[sample_1])
+print(estim)
+
+#Dado que conocemos la distribución teórica de cada una de las variables del conjunto de datos
+#podemos calcular el valor esperado del total de la muestra
+c("Target_1" = 10 * 1000,
+  "Target_2" = -20 * 1000,
+  "Target_3" = 0)
+
+#Error estándar de la estimación
+sqrt(estim$variance)
+```
+
+Para el caso de muestreo estratificado:
+
+```{r}
+#Definimos un sampler a partir de las claves del segundo conjunto de datos
+set.seed(273)
+key = 1:nrow(st_data.dt)
+sssmplr <- ssSampler(key = key,
+                     strata = st_data.dt[, strata_class],
+                     ssize = c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160))
+sample_2 <- getSample(sssmplr)
+
+#Definimos las variables objetivo
+target_cols <- c("Target_1", "Target_2", "Target_3")
+
+#Estimador HT para muestreo estratificado
+estim <- HTEstimate(object = sssmplr,
+                    sampleKeys = sample_2,
+                    sampleData = st_data.dt[sample_2, ..target_cols])
+
+print(estim$total)
+
+#Sabiendo las distribuciones teóricas:
+c("Target_1" = 500 * 10 + 300 * 1 + 200 * 20,
+  "Target_2" = 500 * (-20) + 300 * (-20) + 200 * (-20),
+  "Target_3" = 500 * 0 + 300 * 30 + 200 * 10)
+
+#Error estándar de la estimación
+sqrt(estim$variance)
+```
+
+
+### REstimate
+
+Esta función también calcula el estimador Horvitz-Thompson, pero emplea un cálculo distinto para su varianza en el que emplea una aproximación en la que se requieren únicamente las probabilidades de selección de primer orden. Su implementación requiere de una estratificación en los datos, y de tener una serie de pesos muestrales asociados.
+
+
+```{r}
+#Definimos un sampler a partir de las claves del segundo conjunto de datos
+set.seed(273)
+key = 1:nrow(st_data.dt)
+sssmplr <- ssSampler(key = key,
+                     strata = st_data.dt[, strata_class],
+                     ssize = c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160))
+sample_2 <- getSample(sssmplr)
+#Asumimos muestreo estratificado proporcional al tamaño del estrato
+#Las probabilidades de selección (pi) son n_h/N_h
+#Los pesos son los factores de elevación, es decir, 1/pi
+st_data.dt[, N_h := .N , by = c("strata_class")]
+#Vector de n_h
+strata_to_sample_size <- c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160)
+st_data.dt[, weights := N_h/strata_to_sample_size[strata_class]]
+st_data.dt[, N_h := NULL]
+strata_colummn <- "strata_class"
+weights_column <- "weights"
+estim <- REstimate(data = st_data.dt[sample_2],
+                   strata_colummn = strata_colummn,
+                   weights_column = weights_column)
+print(estim)
+#Sabiendo las distribuciones teóricas:
+c("Target_1" = 500 * 10 + 300 * 1 + 200 * 20,
+  "Target_2" = 500 * (-20) + 300 * (-20) + 200 * (-20),
+  "Target_3" = 500 * 0 + 300 * 30 + 200 * 10)
+
+#Error estándar de la estimación
+sapply(c("Target_1", "Target_2", "Target_3"), function(t){
+  return(sqrt(estim[[t]]$Variance))
+})
+```
+
+
+### MCSubRBEstimate
+
+Este estimador emplea estimación asistida por modelos para calcular su estimación, con lo que requiere de un modeler auxiliar para funcionar. También requiere de un sampler principal y un subsampler. Las keys del subsampler deberán coincidir con las de la muestra principal.
+
+En particular, implementa el estimador definido en el paper de Sanguiao-Zhang (2020) \url{https://arxiv.org/abs/2003.11423} (ecuación 11).
+
+Ya que la Rao-Blackwelización exacta es computacionalmente prohibitiva, se emplea un método de submuestreo Monte Carlo para obtener una estimación razonable.
+
+Entonces, partiendo del tercer conjunto de datos:
+
+1) Definimos un sampler principal. Este representará el método real a partir del cuál hemos obtenido la muestra.
+
+2) Obtenemos la muestra del sampler principal y definimos un subsampler a partir de esta muestra (en la práctica, serán todas las filas/registros de los datos que hemos recogido). Este sampler será el que nos permitirá hacer las submuestras Monte Carlo. En el ejemplo, definimos que sus submuestras sean de la mitad del tamaño del sampler principal, aunque este parámetro puede ajustarse.
+
+3) Definimos un modeler que va a predecir la variable `target` entrenándose con las submuestras, y prediciendo sobre los datos complementarios.
+
+4) Definimos y aplicamos el estimador. Escogemos aplicar 100 submuestreos, aunque este parámetro puede cambiarse.
+
+```{r}
+set.seed(273)
+#Sampler principal
+data.keys <- 1:nrow(std_ma_data.dt)
+
+train_size = round(0.8 * nrow(std_ma_data.dt))
+main_sampler <- srsSampler(key = data.keys, ssize = train_size)
+main_sample <- getSample(main_sampler)
+
+#sub Sampler
+sub_sampler <- srsSampler(key = main_sample, ssize = train_size*0.5)
+
+#modeler
+target <- "target"
+regressors <- setdiff(names(std_ma_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params = params,
+                                  target = target,
+                                  regressors = regressors)
+
+#Aplicamos el estimador
+estim <- MCSubRBEstimate(auxModeler = modeler,
+                         data = std_ma_data.dt,
+                         mainSampler = main_sampler,
+                         subSampler = sub_sampler,
+                         targetVar = target,
+                         ssNumber = 100)
+print(estim)
+print(paste0("Valor real de target:", std_ma_data.dt[, sum(target)]))
+print(paste0("Valor de la estimación de target:", estim$total$value))
+print(paste0("Error Monte Carlo de la estimación: ", estim$total$MC_error))
+print(paste0("Error estándar de la estimación: ", sqrt(estim$variance$value)))
+print(paste0("Error estándar de la estimación del error de Monte Carlo: ", sqrt(estim$variance$MC_error)))
+```
+
+
+### preTrainedEstimate
+
+Esta función asume que tenemos un modelo que proporciona estimaciones suficientemente razonables como para calcular el total de una variable objetivo (dado un conjunto de variables). Debido a esta suposición, no resulta posible calcular una varianza asociada.
+
+```{r}
+#Definimos un sampler para obtener particiones de train y test
+data.keys <- 1:nrow(std_ma_data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+
+#Definimos un modeler
+target <- "target"
+regressors <- setdiff(names(std_ma_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params = params, target = target, regressors = regressors)
+
+modeler <- train(modeler, data = std_ma_data.dt, subSet = train.keys)
+
+#Llamamos a la función
+preds <- preTrainedEstimate(modeler, data = std_ma_data.dt)
+print(preds)
+#Comparamos con el total real del conjunto de datos
+print(std_ma_data.dt[, sum(target)])
+```
+
+
+## Estimadores por dominios
+
+Estas funciones son la generalización de los anteriores para el caso de estimación por dominios
+
+### HTDomainEstimate
+
+Su uso es análogo al caso simple, salvo en que requiere que se le proporcionen los dominios.
+
+Para muestreo aleatorio simple:
+
+```{r}
+#Definimos un sampler a partir de las claves del tercer conjunto de datos
+set.seed(273)
+key <- 1:nrow(std_ma_data.dt)
+srsmplr <- srsSampler(key = key, ssize = 800)
+sample_1 <- getSample(srsmplr)
+
+#Separamos los dominios y definimos las variables objetivo
+domains <- std_ma_data.dt[sample_1, domain_class]
+target_cols <- c("income", "cost_of_living")
+
+#Llamamos a la función para obtener una estimación
+estim <- HTDomainEstimate(object = srsmplr,
+                          sampleKeys = sample_1,
+                          sampleData = std_ma_data.dt[sample_1, ..target_cols],
+                          domains = std_ma_data.dt[sample_1, domain_class])
+print(estim)
+print(paste0("Valor real del total de income: ", std_ma_data.dt[, sum(income), by = c("domain_class")]))
+print(paste0("Valor real del total de cost_of_living: ", std_ma_data.dt[, sum(cost_of_living), by = c("domain_class")]))
+```
+
+Para muestreo estratificado:
+
+```{r}
+#Definimos un sampler a partir de las claves del segundo conjunto de datos
+set.seed(273)
+key = 1:nrow(std_ma_data.dt)
+sssmplr <- ssSampler(key = key,
+                     strata = std_ma_data.dt[, strata_class],
+                     ssize = c("Rural" = 408, "Urban" = 392))
+sample_2 <- getSample(sssmplr)
+
+#Definimos las variables objetivo
+target_cols <- c("income", "cost_of_living")
+
+#Estimador HT para muestreo estratificado
+estim <- HTDomainEstimate(object = sssmplr,
+                          sampleKeys = sample_2,
+                          sampleData = std_ma_data.dt[sample_2, ..target_cols],
+                          domains = std_ma_data.dt[sample_2, domain_class])
+print(estim)
+print(paste0("Valor real del total de income: ", std_ma_data.dt[, sum(income), by = c("domain_class")]))
+print(paste0("Valor real del total de cost_of_living: ", std_ma_data.dt[, sum(cost_of_living), by = c("domain_class")]))
+```
+
+
+### RDomainEstimate
+
+Su uso es análogo al caso simple, salvo en que requiere que se le proporcionen los dominios.
+
+```{r}
+#Hacemos una copia de los datos a usar
+data_copy.dt <- data.table::copy(std_ma_data.dt)
+data_copy.dt[, target := NULL]
+#Definimos un sampler a partir de las claves del tercer conjunto de datos
+set.seed(273)
+key = 1:nrow(data_copy.dt)
+sssmplr <- ssSampler(key = key,
+                     strata = data_copy.dt[, strata_class],
+                     ssize = c("Rural" = 408, "Urban" = 392))
+sample_2 <- getSample(sssmplr)
+#Asumimos muestreo estratificado proporcional al tamaño del estrato
+#Las probabilidades de selección (pi) son n_h/N_h
+#Los pesos son los factores de elevación, es decir, 1/pi
+data_copy.dt[, N_h := .N , by = c("strata_class")]
+#Vector de n_h
+strata_to_sample_size <- c("Rural" = 408, "Urban" = 392)
+data_copy.dt[, weights := N_h/strata_to_sample_size[strata_class]]
+data_copy.dt[, N_h := NULL]
+
+strata_colummn <- "strata_class"
+domain_column <- "domain_column"
+weights_column <- "weights"
+
+estim <- RDomainEstimate(data = data_copy.dt[sample_2,],
+                         strata_colummn = strata_colummn,
+                         domain_column = domain_column,
+                         weights_column = weights_column)
+print(estim)
+print(paste0("Valor real del total de income: ", data_copy.dt[, sum(income)]))
+print(paste0("Valor real del total de cost_of_living: ", data_copy.dt[, sum(cost_of_living)]))
+```
+
+### MCSubRBDomainEstimate
+
+Su uso es análogo al caso simple, salvo en que requiere que se le proporcionen los dominios.
+
+```{r}
+set.seed(273)
+#Sampler principal
+data.keys <- 1:nrow(std_ma_data.dt)
+
+train_size = round(0.8 * nrow(std_ma_data.dt))
+main_sampler <- srsSampler(key = data.keys, ssize = train_size)
+main_sample <- getSample(main_sampler)
+
+#sub Sampler
+sub_sampler <- srsSampler(key = main_sample, ssize = train_size*0.5)
+
+#modeler
+target <- "target"
+regressors <- setdiff(names(std_ma_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params = params,
+                                  target = target,
+                                  regressors = regressors)
+
+#Aplicamos el estimador
+estim <- MCSubRBDomainEstimate(auxModeler = modeler,
+                               data = std_ma_data.dt,
+                               mainSampler = main_sampler,
+                               subSampler = sub_sampler,
+                               targetVar = target,
+                               domains = std_ma_data.dt[, domain_class],
+                               ssNumber = 100)
+print(estim)
+print(paste0("Valor real de target: ", std_ma_data.dt[, sum(target), by = c("domain_class")][, V1]))
+print(paste0("Valor de la estimación de target: ", estim$total$value))
+print(paste0("Error Monte Carlo de la estimación: ", estim$total$MC_error))
+print(paste0("Error estándar de la estimación: ", sqrt(estim$variance$value)))
+print(paste0("Error estándar de la estimación del error de Monte Carlo: ", sqrt(estim$variance$MC_error)))
+```
+
+### preTrainedDomainEstimate
+
+Su uso es análogo al caso simple, salvo en que requiere que se le proporcione la columna de los dominios en los datos.
+
+```{r}
+#Definimos un sampler para obtener particiones de train y test
+data.keys <- 1:nrow(std_ma_data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+
+#Definimos un modeler
+target <- "target"
+regressors <- setdiff(names(std_ma_data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params = params, target = target, regressors = regressors)
+
+modeler <- train(modeler, data = std_ma_data.dt, subSet = train.keys)
+
+#Llamamos a la función
+preds <- preTrainedDomainEstimate(modeler, data = std_ma_data.dt, domain_column = "domain_class")
+print(preds)
+#Comparamos con el total real del conjunto de datos
+print(std_ma_data.dt[, sum(target), by = c("domain_class")])
+```
+

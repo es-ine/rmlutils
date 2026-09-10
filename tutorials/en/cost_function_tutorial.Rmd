@@ -1,0 +1,627 @@
+---
+title: "costFunction tutorial"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+It is recommended that the user reviews the Sampler and Modeler tutorials before reading this document.
+
+The user is reminded that all RMLutils methods and functions are
+documented. Using the help tab, or the command itself, essential documentation
+can be obtained for any object or function.
+
+**Additionally, it is important to emphasize that, to use most modelers, the user will be responsible for installing the specific library they use. To keep a lightweight installation, RMLutils does not install any of the machine learning libraries used by the modelers.**
+
+## Use and types of cost functions
+
+Cost functions are the main instrument in RMLutils for evaluating modelers. Their functionality is integrated with the modelers themselves and can be used directly through their `evaluate` or `crossValidate` methods or called manually, specifying the modeler to evaluate or the metrics needed to calculate the cost.
+
+All cost functions have the following methods:
+
+- `getCost`: Calculates the cost from specified data and a modeler.
+
+- `getReducedCost`: Calculates the averaged cost for different k-folds. It is used automatically when using the `crossValidate` method of any modeler. It should be noted that the averaging is not a simple weighted mean, but is calculated taking into account the non-linear elements that exist in the operations to calculate each individual score, so the metadata obtained from each k-fold is used to compute the final score.
+
+Additionally, getCost returns a dictionary of key metrics for the cost calculation that may be of interest to the user.
+
+The outputs are named lists, structured first at the target variable level, and within each one, another list containing the cost and other metrics.
+
+To use the `getCost` method, the following parameters must be provided:
+
+- `object`: Cost function to use.
+
+- `data`: Dataset on which to obtain the cost.
+
+- `modeler`: Modeler from which to obtain the predictions.
+
+- `fSample`: Full sample (the keys of the complete dataset). Some cost functions do not need this parameter.
+
+- `cSample`: Complementary sample. In general, the keys of the data on which we want to obtain the metric/score, for example, those of the training set or the test set.
+
+Since the getReducedCost() method is already used automatically in cross-validation, it will not be developed further in this tutorial, as the general user should not need to access it manually to obtain results.
+
+On the other hand, the `evaluate` method provides a similar interface to getCost, and is designed to provide only the cost (without additional metrics). It has the following parameters:
+
+- `object`: Modeler from which to obtain the predictions.
+
+- `data`: Dataset on which to obtain the cost.
+
+- `cost_function`: Cost function or list of cost functions, to evaluate the internal modelers of complex modelers, such as prePredModeler and classifRegModeler.
+
+- `subSet`: Vector of indices to select a subset of the data.
+
+- `cSample`: (optional) Argument for compatibility with some particular cost functions. In general, the user should use subSet to define the subset of data on which to evaluate the modeler.
+
+The user is free to choose the method for evaluating their modelers.
+
+## Cost functions for classification
+
+The following types exist:
+
+- `confusionMatrixCostFunction`
+- `accuracyCostFunction`
+- `precisionCostFunction`
+- `recallCostFunction`
+- `f1ScoreCostFunction`
+- `ROCAUCCostFunction`
+
+Except for `ROCAUCCostFunction`, all classification cost functions use ConfusionMatrixCostFunction as an intermediary to calculate their cost, so their output always contains a confusion matrix.
+
+We define a dataset and a classifierModeler for these cost functions.
+
+```{r}
+# Define common data for the classification task
+c_data.dt <- generateMulticlassClassificationData(n_samples = 1000,
+                                                  generate_random_weights = FALSE)
+# Define train/test partitions
+set.seed(273)
+c_data.keys <- 1:nrow(c_data.dt)
+c_train_size = round(0.8 * nrow(c_data.dt))
+c_smplr <- srsSampler(key = c_data.keys, ssize = c_train_size)
+c_train.keys <- getSample(c_smplr)
+c_test.keys <- setdiff(c_data.keys, c_train.keys)
+head(c_data.dt)
+
+# Define model parameters
+c_target <- "classification_target"
+c_regressors <- setdiff(colnames(c_data.dt), c_target)
+c_params <- list(
+  "num.trees" = 10,
+  "max.depth" = 2
+)
+# Instantiate the model
+classifier <- rangerClassifierModeler(params = c_params,
+                                      target = c_target,
+                                      regressors = c_regressors)
+# And train it
+classifier <- train(classifier, data = c_data.dt, subSet = c_train.keys)
+```
+
+### confusionMatrixCostFunction
+
+Cost function that returns the confusion matrix for a classification modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `class_map`: classMapping object to use. maxScoreClass by default.
+- `normalize`: String indicating how to normalize the matrix. Possible values are:
+
+  - `"true"`: Normalization by true classes (rows).
+  - `"pred"`: Normalization by predicted classes (columns).
+  - `"all"`: Normalization by total classes.
+  - `NULL`: No normalization (default).
+
+- `class_names`: Vector of strings with the levels of the categorical target variable.
+
+```{r}
+# Example of use
+cf <- confusionMatrixCostFunction(weightsColumn = "",
+                                  class_map = maxScoreClass(),
+                                  normalize = NULL,
+                                  class_names = levels(c_data.dt[["classification_target"]]))
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### accuracyCostFunction
+
+Cost function that returns accuracy $(TP+TN)/(TP+FP+TN+FN)$ for a classification modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `class_map`: classMapping object to use. `maxScoreClass` by default.
+- `average`: String indicating the averaging method (in general it will only affect the multiclass case). Possible values are:
+
+  - `"micro"`: Global averaged metric (hit vs miss), weighted by sampling weights, if any.
+  - `"macro"`: Stratified average metric by class, weighted by sampling weights, if any.
+  - `"weighted"`: Stratified average metric by class, weighted by sampling weights, if any, and by the support of each class.
+
+```{r}
+# Example of use
+cf <- accuracyCostFunction(weightsColumn = "",
+                           class_map = maxScoreClass(),
+                           average = "micro")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### precisionCostFunction
+
+Cost function that returns precision $(TP)/(TP+FP)$ for a classification modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `class_map`: classMapping object to use. `maxScoreClass` by default.
+- `average`: String indicating the averaging method (in general it will only affect the multiclass case). Possible values are:
+
+  - `"micro"`: Global averaged metric (hit vs miss), weighted by sampling weights, if any.
+  - `"macro"`: Stratified average metric by class, weighted by sampling weights, if any.
+  - `"weighted"`: Stratified average metric by class, weighted by sampling weights, if any, and by the support of each class.
+
+```{r}
+# Example of use
+cf <- precisionCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### recallCostFunction
+
+Cost function that returns recall/sensitivity or true positive rate $(TP)/(TP+FN)$ for a classification modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `class_map`: classMapping object to use. `maxScoreClass` by default.
+- `average`: String indicating the averaging method (in general it will only affect the multiclass case). Possible values are:
+
+  - `"micro"`: Global averaged metric (hit vs miss), weighted by sampling weights, if any.
+  - `"macro"`: Stratified average metric by class, weighted by sampling weights, if any.
+  - `"weighted"`: Stratified average metric by class, weighted by sampling weights, if any, and by the support of each class.
+
+```{r}
+# Example of use
+cf <- recallCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### f1ScoreCostFunction
+
+Cost function that returns the F1-score for a classification modeler and specified data. It is the harmonic mean of precision and recall/sensitivity.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `class_map`: classMapping object to use. `maxScoreClass` by default.
+- `average`: String indicating the averaging method (in general it will only affect the multiclass case). Possible values are:
+
+  - `"micro"`: Global averaged metric (hit vs miss), weighted by sampling weights, if any.
+  - `"macro"`: Stratified average metric by class, weighted by sampling weights, if any.
+  - `"weighted"`: Stratified average metric by class, weighted by sampling weights, if any, and by the support of each class.
+  
+```{r}
+# Example of use
+cf <- f1ScoreCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### ROCAUCCostFunction
+
+Cost function that returns the area under the ROC (Receiver Operating Characteristic) curve for a classification modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `average`: String indicating the averaging method (in general it will only affect the multiclass case). Possible values are:
+
+  - `"micro"`: Global averaged metric (hit vs miss), weighted by sampling weights, if any.
+  - `"macro"`: Stratified average metric by class, weighted by sampling weights, if any.
+  - `"weighted"`: Stratified average metric by class, weighted by sampling weights, if any, and by the support of each class.
+
+```{r}
+# Example of use
+cf <- ROCAUCCostFunction(weightsColumn = "",
+                         average = "micro")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+
+# We can plot the ROC curve with the output of getCost, since it returns TPR and FPR:
+tpr <- cost$classification_target$class_metrics$tpr
+fpr <- cost$classification_target$class_metrics$fpr
+plot(fpr, tpr, type = "l")
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+If we select a different `average`, we can obtain ROC curve results by category, which can be useful.
+
+```{r}
+# Example of use
+cf <- ROCAUCCostFunction(weightsColumn = "",
+                         average = "weighted")
+
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+
+# We can plot the ROC curve for a particular category, such as Target_3, with the output of getCost, since it returns TPR and FPR:
+tpr <- cost$classification_target$class_metrics$Target_3$tpr
+fpr <- cost$classification_target$class_metrics$Target_3$fpr
+plot(fpr, tpr, type = "l")
+
+print(paste0("AUC for category Target_3: ", cost$classification_target$class_metrics$Target_3$auc))
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+## Cost functions for regression
+
+The following types exist:
+
+- `r2CostFunction`
+- `squareBiasCostFunction`
+- `MSECostFunction`
+- `groupMSECostFunction`
+- `MCSubRBMSECostFunction`
+- `holdoutTemporalCostFunction`
+
+We define a dataset and a regressorModeler for these cost functions.
+
+```{r}
+# Define common data for the regression task
+r_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000,
+                                                               generate_random_weights = TRUE)
+# Define train/test partitions
+set.seed(273)
+r_data.keys <- 1:nrow(r_data.dt)
+r_train_size = round(0.8 * nrow(r_data.dt))
+r_smplr <- srsSampler(key = r_data.keys, ssize = r_train_size)
+r_train.keys <- getSample(r_smplr)
+r_test.keys <- setdiff(r_data.keys, r_train.keys)
+head(r_data.dt)
+
+# Define model parameters
+r_target <- "target"
+r_regressors <- setdiff(colnames(r_data.dt), r_target)
+r_params <- list(
+  "num.trees" = 20,
+  "max.depth" = 10
+)
+# Instantiate the model
+regressor <- rangerRegressorModeler(params = r_params,
+                                    target = r_target,
+                                    regressors = r_regressors)
+# And train it
+regressor <- train(regressor, data = r_data.dt, subSet = r_train.keys)
+```
+
+### r2CostFunction
+
+Cost function that returns the $R^{2}$ metric for a regression modeler and specified data. The `fSample` parameter indicating the keys of the complete dataset must be specified.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+
+```{r}
+# Example of use
+cf <- r2CostFunction(weightsColumn = "weights")
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                fSample = r_data.keys,
+                cSample = r_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### squareBiasCostFunction
+
+Cost function that returns the squared bias of the predictions for a regression modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+
+```{r}
+# Example of use
+cf <- squareBiasCostFunction(weightsColumn = "weights")
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### MSECostFunction
+
+Cost function that returns the mean squared error of the predictions for a regression modeler and specified data.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+
+```{r}
+# Example of use
+cf <- MSECostFunction(weightsColumn = "weights")
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### groupMSECostFunction
+
+Cost function that returns the weighted mean squared error of a function for each specified group/stratum. That is, after prediction, each group provides a unique metric such as sum or mean, and the mean squared error is calculated by comparing this sum/mean of predictions and original values.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `groupWeightsFunction`: Averaging/combining function for the weights of each group.
+- `groupFunction`: Function to average/combine the values of the target variable for a complete group.
+- `groupColumn`: Name of the column that defines the group/stratum/domain in the dataset.
+
+```{r}
+# Example of use
+cf <- groupMSECostFunction(weightsColumn = "weights",
+                           groupWeightsFunction = sum, 
+                           groupColumn = "strata_class", 
+                           groupFunction = mean)
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### groupTotalErrorCostFunction
+
+A cost function that calculates the weighted absolute error by group, for each group element, and then combines it to obtain the total absolute prediction error.
+
+Parameters:
+
+- `weightsColumn`: Name of the column with sampling weights in the data (if it exists).
+- `groupVars`: String or string vector indicating the variables by which to group the data.
+
+```{r}
+# Example of use
+cf <- groupTotalErrorCostFunction(weightsColumn = "weights",
+                                  groupVars = c("strata_class", "domain_class"))
+# Evaluation with getCost (returns metadata)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+# Evaluation with evaluate (returns only the cost)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### MCSubRBMSECostFunction
+
+A cost function that outputs the estimator, bias MSE and Monte Carlo error of
+the estimator based on Zhang, L.-C., Sanguiao-Sande, L., & Lee, D.
+(2025). Design-Based Predictive Inference. Journal of Official Statistics,
+41(1), 404-432. \url{https://journals.sagepub.com/doi/10.1177/0282423X241277719}.
+
+Since this method requires performing a series of sub-samplings, it is recommended to use it directly with crossValidate (which calls getReducedCost).
+
+Parameters:
+
+- `sampler`: Sampler used to obtain the sample.
+- `sampleKeys`: Set of keys used to define the training set for the model.
+- `nonSampleData`: Data complementary to the training set.
+
+```{r}
+# Example of use
+cf <- MCSubRBMSECostFunction(sampler = r_smplr,
+                             sampleKeys = r_train.keys, 
+                             nonSampleData = r_data.dt[-r_train.keys])
+# Evaluation with getCost (returns metadata)
+crossValidate(regressor,
+              r_data.dt[r_train.keys,],
+              srsSampler(1:length(r_train.keys),150), 
+              cf,
+              times = 100)# 100 sub-samples
+```
+
+### holdoutTemporalCostFunction
+
+Complex cost function that combines another type of cost function with a cvTemporalSampler. Useful when intending to evaluate predictions where the data has some temporal dependence.
+
+Parameters:
+
+- `costFunction`: Cost function to use.
+- `cvTemporalSampler`: cvTemporalSampler to use.
+
+First, we generate a dataset with temporal dependence and a cvTemporalSampler:
+
+```{r}
+# Define a dataset with 36 periods (months)
+years <- c(2023, 2024, 2025)
+total_periods <- c(sapply(years, function(y){
+  months <- 1:12
+  months[1:9] <- paste0("0", months[1:9])
+  return(paste0("MM", months, y))
+}, USE.NAMES = FALSE))
+
+# Generate data for each period
+data.dt <- rbindlist(lapply(total_periods, function(p){
+  dt <- generateRegressionData(n_samples = 100,
+                               generate_random_weights = FALSE)
+  dt[, period := p]
+  return(dt)
+}))
+head(data.dt)
+
+smplr <- cvTemporalSampler(key = 1:nrow(data.dt),
+                           data = data.dt,
+                           identifier = "period",
+                           folds = 5,
+                           n_valPeriods = 6, # Require 6 months for validation
+                           orderPeriods = total_periods)
+```
+
+Then, we define a modeler for this data and train it:
+
+```{r}
+# Define modeler and train it
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+target <- "regression_target"
+regressors <- setdiff(colnames(data.dt), target)
+
+modeler <- rangerRegressorModeler(params = params,
+                                  target = target,
+                                  regressors = regressors)
+
+modeler <- train(modeler, data = data.dt)
+```
+
+Finally, we define the complete cost function and obtain the cost:
+
+```{r}
+cf <- holdoutTemporalCostFunction(costFunction = r2CostFunction(),
+                                  cvTemporalSampler = smplr)
+
+cost <- getCost(object = cf,
+                data = data.dt,
+                modeler = modeler,
+                fSample = 1:nrow(data.dt),
+                cSample = 1:nrow(data.dt))
+print(cost$regression_target$cost)
+```
+

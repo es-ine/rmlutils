@@ -1,0 +1,630 @@
+---
+title: "Tutorial de funciones de coste"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## Uso y tipo de las funciones de coste
+
+Las funciones de coste son el instrumento principal de RMLutils para evaluar modelers. Su funcionalidad está integrada con los propios modelers y pueden emplearse directamente a partir de sus método `evaluate` y `crossValidate` o bien, llamarse manualmente, especificando el modeler a evaluar o las métricas necesarias para calcular el coste.
+
+Todas las funciones de coste tienen los siguientes métodos:
+
+- `getCost`: Calcula el coste a partir de unos datos y un modeler especificado.
+
+- `getReducedCost`: Calcula el coste promediado para diferentes k-folds. Se utiliza automáticamente al emplear el método `crossValidate` de cualquier modeler. Cabe destacar que el promediado no es una simple media ponderada, sino que se calcula teniendo en cuenta los elementos no-lineales que existen en las operaciones para calcular cada score individual, con lo que se emplean los metadatos obtenidos de cada k-fold para computar el score definitivo.
+
+Adicionalmente, getCost devuelve un diccionario de métricas clave para el cálculo del coste que pueden resultar de interés para el usuario.
+
+Los outputs son listas con nombres, que se estructuran primero a nivel de la variable objetivo, y dentro de cada una de ellas, hay otra lista que contiene el coste y demás métricas.
+
+Para utilizar el método `getCost` se le deben proporcionar los siguientes parámetros:
+
+- `object`: Función de coste a utilizar.
+- `data`: Conjunto de datos sobre los que obtener el coste.
+- `modeler`: Modeler a partir del cual obtener las predicciones.
+- `fSample`: Muestra completa (las claves de conjunto de datos completo). Algunas funciones de coste no necesitan este parámetro.
+- `cSample`: Muestra complementaria. En general, las claves de los datos sobre los que queremos obtener la métrica/score, por ejemplo, las del conjunto de entrenamiento o las del test.
+
+Dado que el método getReducedCost() ya se emplea automáticamente en la validación cruzada, no se desarrollará más en este tutorial, pues el usuario general no deberá acceder manualmente al mismo para obtener resultados.
+
+Por otra parte, el método `evaluate` porporciona una interfaz similar a getCost, y está pensado para proporcionar únicamente el coste (sin métricas adicionales). Tiene los siguientes parámetros:
+
+- `object`: Modeler a partir del cual obtener las predicciones.
+- `data`: Conjunto de datos sobre los que obtener el coste.
+- `cost_function`: Función de coste o lista de funciones de coste, para evaluar los modelers internos de los modelers complejos, como `prePredModeler` y `classifRegModeler`.
+- `subSet`: Vector de índices para seleccionar un subconjunto sobre los datos.
+- `cSample`: (opcional) Argumento para compatibilidad con algunas funciones de coste particulares. En general, el usuario debería emplear subSet si para definir el subconjunto de datos sobre el que evaluar el modeler.
+
+El usuario es libre de escoger el método de evaluar sus modelers.
+
+## Funciones de coste para clasificación
+
+Existen los siguientes tipos:
+
+- `confusionMatrixCostFunction`
+- `accuracyCostFunction`
+- `precisionCostFunction`
+- `recallCostFunction`
+- `f1ScoreCostFunction`
+- `ROCAUCCostFunction`
+
+A excepción de la `ROCAUCCostFunction`, todas las funciones de coste de clasificación emplean la ConfusionMatrixCostFunction como intermediario para calcular su coste, con lo que su output contiene siempre una matriz de confusión.
+
+Definimos un conjunto de datos y un classifierModeler para estas funciones de coste.
+
+```{r}
+#Definimos datos comunes para la tarea de clasificación
+c_data.dt <- generateMulticlassClassificationData(n_samples = 1000,
+                                                  generate_random_weights = FALSE)
+#Definimos particiones train/test
+set.seed(273)
+c_data.keys <- 1:nrow(c_data.dt)
+c_train_size = round(0.8 * nrow(c_data.dt))
+c_smplr <- srsSampler(key = c_data.keys, ssize = c_train_size)
+c_train.keys <- getSample(c_smplr)
+c_test.keys <- setdiff(c_data.keys, c_train.keys)
+head(c_data.dt)
+
+#Definimos los parámetros del modelo
+c_target <- "classification_target"
+c_regressors <- setdiff(colnames(c_data.dt), c_target)
+c_params <- list(
+  "num.trees" = 10,
+  "max.depth" = 2
+)
+#Instanciamos el modelo
+classifier <- rangerClassifierModeler(params = c_params,
+                                      target = c_target,
+                                      regressors = c_regressors)
+#Y lo entrenamos
+classifier <- train(classifier, data = c_data.dt, subSet = c_train.keys)
+```
+
+
+### confusionMatrixCostFunction
+
+Función de coste que devuelve la matriz de confusión para un modeler de clasificación y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `class_map`: Objecto classMapping a utilizar. `maxScoreClass` de forma predeterminada.
+
+- `normalize`: String indicando la forma de normalizar la matriz. Sus valores posibles son:
+  - `"true"`: Normalización por clases verdaderas (filas).
+  - `"pred"`: Normalización por clases predichas (columnas).
+  - `"all"`: Normalización por clases totales.
+  - `NULL`: Sin normalización (predeterminado).
+
+- `class_names`: Vector de strings con los niveles de la variable categórica objetivo.
+  
+```{r}
+#Ejemplo de uso
+cf <- confusionMatrixCostFunction(weightsColumn = "",
+                                  class_map = maxScoreClass(),
+                                  normalize = NULL,
+                                  class_names = levels(c_data.dt[["classification_target"]]))
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+  
+### accuracyCostFunction
+
+Función de coste que devuelve la acuracidad $(TP+TN)/(TP+FP+TN+FN)$ para un modeler de clasificación y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `class_map`: Objecto classMapping a utilizar. `maxScoreClass` de forma predeterminada.
+
+- `average`: String indicando el método de promediado (en general afectará solo al caso multiclase). Sus valores posibles son:
+
+  - `"micro"`: Métrica global promediada (acierto vs fallo), pesada con los pesos muestrales, si hubiera.
+  - `"macro"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera.
+  - `"weighted"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera, y por el soporte de cada clase.
+
+```{r}
+#Ejemplo de uso
+cf <- accuracyCostFunction(weightsColumn = "",
+                           class_map = maxScoreClass(),
+                           average = "micro")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+
+### precisionCostFunction
+
+Función de coste que devuelve la precisión $TP/(TP+FP)$ para un modeler de clasificación y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `class_map`: Objecto classMapping a utilizar. `maxScoreClass` de forma predeterminada.
+
+- `average`: String indicando el método de promediado (en general afectará solo al caso multiclase). Sus valores posibles son:
+
+  - `"micro"`: Métrica global promediada (acierto vs fallo), pesada con los pesos muestrales, si hubiera.
+  - `"macro"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera.
+  - `"weighted"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera, y por el soporte de cada clase.
+
+```{r}
+#Ejemplo de uso
+cf <- precisionCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### recallCostFunction
+
+Función de coste que devuelve la exhaustividad/sensibilidad o tasa de verdaderos positivos $TP/(TP+FN)$ para un modeler de clasificación y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `class_map`: Objecto classMapping a utilizar. `maxScoreClass` de forma predeterminada.
+
+- `average`: String indicando el método de promediado (en general afectará solo al caso multiclase). Sus valores posibles son:
+
+  - `"micro"`: Métrica global promediada (acierto vs fallo), pesada con los pesos muestrales, si hubiera.
+  - `"macro"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera.
+  - `"weighted"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera, y por el soporte de cada clase.
+
+```{r}
+#Ejemplo de uso
+cf <- recallCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### f1ScoreCostFunction
+
+Función de coste que devuelve la F1-score para un modeler de clasificación y unos datos especificados. Es la media armónica de precisión y exhaustividad/sensibilidad.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `class_map`: Objecto classMapping a utilizar. `maxScoreClass` de forma predeterminada.
+
+- `average`: String indicando el método de promediado (en general afectará solo al caso multiclase). Sus valores posibles son:
+
+  - `"micro"`: Métrica global promediada (acierto vs fallo), pesada con los pesos muestrales, si hubiera.
+  - `"macro"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera.
+  - `"weighted"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera, y por el soporte de cada clase.
+
+```{r}
+#Ejemplo de uso
+cf <- f1ScoreCostFunction(weightsColumn = "",
+                            class_map = maxScoreClass(),
+                            average = "micro")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### ROCAUCCostFunction
+
+Función de coste que devuelve el área bajo la curva ROC (Receiver Operating Characteristic) para un modeler de clasificación y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+- `average`: String indicando el método de promediado (en general afectará solo al caso multiclase). Sus valores posibles son:
+
+  - `"micro"`: Métrica global promediada (acierto vs fallo), pesada con los pesos muestrales, si hubiera.
+  - `"macro"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera.
+  - `"weighted"`: Métrica promedio estratificada por clase, pesada con los pesos muestrales, si hubiera, y por el soporte de cada clase.
+
+```{r}
+#Ejemplo de uso
+cf <- ROCAUCCostFunction(weightsColumn = "",
+                         average = "micro")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+
+#Podemos representar la curva ROC con la salida de getCost, ya que devuelve los TPR y FPR:
+tpr <- cost$classification_target$class_metrics$tpr
+fpr <- cost$classification_target$class_metrics$fpr
+plot(fpr, tpr, type = "l")
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+Si seleccionamos un `average` distinto, podemos obtener resultados de la curva ROC por categoría, lo cual puede ser de utildad.
+
+```{r}
+#Ejemplo de uso
+cf <- ROCAUCCostFunction(weightsColumn = "",
+                         average = "weighted")
+
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf, data = c_data.dt, modeler = classifier, cSample = c_test.keys)
+
+#Podemos representar la curva ROC para una categoría particular, como Target_3 con la salida de getCost, ya que devuelve los TPR y FPR:
+tpr <- cost$classification_target$class_metrics$Target_3$tpr
+fpr <- cost$classification_target$class_metrics$Target_3$fpr
+plot(fpr, tpr, type = "l")
+
+print(paste0("AUC para la categoría Target_3: ", cost$classification_target$class_metrics$Target_3$auc))
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = classifier,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+
+## Funciones de coste para regresión
+
+Existen los siguientes tipos:
+
+- `r2CostFunction`
+- `squareBiasCostFunction`
+- `MSECostFunction`
+- `groupMSECostFunction`
+- `MCSubRBMSECostFunction`
+- `holdoutTemporalCostFunction`
+
+Definimos un conjunto de datos y un regressorModeler para estas funciones de coste.
+
+```{r}
+#Definimos datos comunes para la tarea de clasificación
+r_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000,
+                                                               generate_random_weights = TRUE)
+#Definimos particiones train/test
+set.seed(273)
+r_data.keys <- 1:nrow(r_data.dt)
+r_train_size = round(0.8 * nrow(r_data.dt))
+r_smplr <- srsSampler(key = r_data.keys, ssize = r_train_size)
+r_train.keys <- getSample(r_smplr)
+r_test.keys <- setdiff(r_data.keys, r_train.keys)
+head(r_data.dt)
+
+#Definimos los parámetros del modelo
+r_target <- "target"
+r_regressors <- setdiff(colnames(r_data.dt), r_target)
+r_params <- list(
+  "num.trees" = 20,
+  "max.depth" = 10
+)
+#Instanciamos el modelo
+regressor <- rangerRegressorModeler(params = r_params,
+                                    target = r_target,
+                                    regressors = r_regressors)
+#Y lo entrenamos
+regressor <- train(regressor, data = r_data.dt, subSet = r_train.keys)
+```
+
+### r2CostFunction
+
+Función de coste que devuelve la métrica $R^{2}$ para un modeler de regresión y unos datos especificados. Debe especificarse el parámetro `fSample` que indique las claves del conjunto de datos completo.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+```{r}
+#Ejemplo de uso
+cf <- r2CostFunction(weightsColumn = "weights")
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                fSample = r_data.keys,
+                cSample = r_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### squareBiasCostFunction
+
+Función de coste que devuelve el sesgo al cuadrado de las predicciones para un modeler de regresión y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+```{r}
+#Ejemplo de uso
+cf <- squareBiasCostFunction(weightsColumn = "weights")
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### MSECostFunction
+
+Función de coste que devuelve el error cuadrático medio de las predicciones para un modeler de regresión y unos datos especificados.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+
+```{r}
+#Ejemplo de uso
+cf <- MSECostFunction(weightsColumn = "weights")
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### groupMSECostFunction
+
+Función de coste que devuelve el error cuadrático medio pesado de una función para cada grupo/estrato especificado. Es decir, tras la predicción, cada grupo proporciona una métrica única como la suma o la media, y el error cuadrático medio se calcula comparando esta suma/media de as predicciones y de los valores originales.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+- `groupWeightsFunction`: Función de promediado/combinado para los pesos de cada grupo.
+- `groupFunction`: Función para promediar/combinar los valores de la variable objetivo para un grupo completo.
+- `groupColumn`: Nombre de la columna que define el grupo/estrato/dominio en el conjunto de datos.
+
+```{r}
+#Ejemplo de uso
+cf <- groupMSECostFunction(weightsColumn = "weights",
+                           groupWeightsFunction = sum, 
+                           groupColumn = "strata_class", 
+                           groupFunction = mean)
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### groupTotalErrorCostFunction
+
+Función de coste que calcula el error absoluto total (pesado) por grupo de variables, y para cada elemento del grupo. Luego los combina para obtener el error total absoluto de predicción.
+
+Parámetros:
+
+- `weightsColumn`: Nombre de la columna con los pesos muestrales en los datos (si existe).
+- `groupVars`: String o vector de strings indicando las variables por las que agrupar datos.
+
+```{r}
+#Ejemplo de uso
+cf <- groupTotalErrorCostFunction(weightsColumn = "weights",
+                                  groupVars = c("strata_class", "domain_class"))
+#Evaluación con getCost (devuelve los metadatos)
+cost <- getCost(object = cf,
+                data = r_data.dt,
+                modeler = regressor,
+                cSample = r_test.keys)
+print(cost)
+
+#Evaluación con evaluate (devuelve únicamente el coste)
+evaluate(object = regressor,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### MCSubRBMSECostFunction
+
+Función de coste que devuelve el estimador, sesgo, error cuadrático medio y error de montecarlo del estimador desarrollado en el paper de Zhang, L.-C., Sanguiao-Sande, L., & Lee, D. (2025). Design-Based Predictive Inference. Journal of Official Statistics, 41(1), 404-432. \url{https://journals.sagepub.com/doi/10.1177/0282423X241277719}, para un modeler de regresión y unos datos especificados. Ya que este método requiere de efectuar una serie de submuestreos, se recomienda emplearlo directamente con crossValidate (que llama a getReducedCost).
+
+Parámetros:
+
+- `sampler`: Sampler empleado en obtener la muestra.
+- `sampleKeys`: Conjunto de claves empleadas para definir el conjunto de entrenamiento para el modelo.
+- `nonSampleData`: Datos complementarios al entrenamiento.
+
+```{r}
+#Ejemplo de uso
+cf <- MCSubRBMSECostFunction(sampler = r_smplr,
+                             sampleKeys = r_train.keys, 
+                             nonSampleData = r_data.dt[-r_train.keys])
+#Evaluación con getCost (devuelve los metadatos)
+crossValidate(regressor,
+              r_data.dt[r_train.keys,],
+              srsSampler(1:length(r_train.keys),150),
+              cf,
+              times = 100)#100 submuestras
+```
+
+### holdoutTemporalCostFunction
+
+Función de coste compleja que combina una función de coste de otro tipo con un cvTemporalSampler. De utilidad cuando se pretende evaluar predicciones en las que los datos tienen alguna dependencia temporal.
+
+Parámetros:
+
+- `costFunction`: Función de coste a emplear.
+- `cvTemporalSampler`: cvTemporalSampler a emplear.
+
+Primero, generamos un conjunto de datos con dependencia temporal y un cvTemporalSampler:
+
+```{r}
+#Definimos un conjunto de datos con 36 periodos (meses)
+years <- c(2023, 2024, 2025)
+total_periods <- c(sapply(years, function(y){
+  months <- 1:12
+  months[1:9] <- paste0("0", months[1:9])
+  return(paste0("MM", months, y))
+}, USE.NAMES = FALSE))
+
+#Generamos datos para cada periodo
+data.dt <- rbindlist(lapply(total_periods, function(p){
+  dt <- generateRegressionData(n_samples = 100,
+                               generate_random_weights = FALSE)
+  dt[, period := p]
+  return(dt)
+}))
+head(data.dt)
+
+smplr <- cvTemporalSampler(key = 1:nrow(data.dt),
+                           data = data.dt,
+                           identifier = "period",
+                           folds = 5,
+                           n_valPeriods = 6,#Require 2 months for validation
+                           orderPeriods = total_periods)
+```
+
+Luego, definimos un modeler para estos datos y lo entrenamos:
+
+```{r}
+#Define modeler and train it
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+target <- "regression_target"
+regressors <- setdiff(colnames(data.dt), target)
+
+modeler <- rangerRegressorModeler(params = params,
+                                  target = target,
+                                  regressors = regressors)
+
+modeler <- train(modeler, data = data.dt)
+```
+
+Finalmente, definimos la función de coste completa y obtenemos el coste:
+
+```{r}
+cf <- holdoutTemporalCostFunction(costFunction = r2CostFunction(),
+                                  cvTemporalSampler = smplr)
+
+cost <- getCost(object = cf,
+                data = data.dt,
+                modeler = modeler,
+                fSample = 1:nrow(data.dt),
+                cSample = 1:nrow(data.dt))
+print(cost$regression_target$cost)
+```
+
+
+

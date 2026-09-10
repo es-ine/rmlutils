@@ -1,0 +1,325 @@
+---
+title: "Sampler objects tutorial"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+The user is reminded that all RMLutils methods and functions are
+documented. Using the help tab, or the command itself, essential documentation
+can be obtained for any object or function.
+
+## Structure, types and methods of samplers
+
+Samplers in RMLutils are objects that allow defining a sampling design, with
+custom characteristics according to the dataset we wish to use.
+
+Although some samplers require multiple arguments to instantiate,
+all of them have a common argument, the `key` of the dataset.
+
+Sampler objects have only one associated method: `get_sample()`,
+which returns a sample (or multiple samples) according to the sampler
+specifications.
+
+Currently the following types exist:
+
+
+* `srsSampler`
+* `ssSampler`
+* `bootstrapSampler`
+* `fullSampler`
+* `cvSampler`
+* `cvGroupSampler`
+* `cvMixedSampler`
+* `cvTemporalSampler`
+
+Below we generate a synthetic dataset, using one of the RMLutils functions and define its key:
+
+```{r}
+# Generate data with 20 rows
+data.dt <- generateBinaryClassificationData(n_samples = 20,
+                                            generate_random_weights = FALSE)
+
+# Define the key as the vector of row indices of the dataset
+key <- 1:nrow(data.dt)
+print(key)
+```
+
+Now we can define a simple random sampling without replacement and
+obtain samples:
+
+```{r}
+set.seed(273)
+# ssize is the sample size
+sampler <- srsSampler(key = key, ssize = 5)
+
+# Obtain two independent samples by setting times = 2
+samples <- getSample(sampler, times = 2)
+print(samples)
+```
+
+Samples are returned as a 2D array, so if we want to keep only one,
+we must select one column of the array.
+
+```{r}
+# Apply one of the samples to the dataset:
+data.dt[samples[, 1]]
+```
+
+## srsSampler
+
+This object allows defining a simple random sampling without replacement,
+specifying the number of samples to obtain with its ssize parameter:
+
+```{r}
+srs_sampler <- srsSampler(key = 1:20,
+                        ssize = 10)
+
+set.seed(273)
+# If we do not specify the times parameter, it is assumed to be 1.
+getSample(srs_sampler)
+```
+
+If we wanted to obtain the complementary set (which could be a
+validation/test set if we are training models), we can use
+the base R `setdiff` function:
+
+```{r}
+set.seed(273)
+train.keys <- getSample(srs_sampler)
+test.keys <- setdiff(srs_sampler$key, train.keys)
+print(train.keys)
+print(test.keys)
+```
+
+## ssSampler
+
+This object is the implementation of stratified random sampling (without
+replacement) in RMLutils. It requires an additional argument to be defined,
+a vector or array of strata that matches the dimensions of the dataset
+we are going to use.
+
+Additionally, the `ssize` argument must be a vector specifying the number
+of samples to obtain from each stratum. See an example:
+
+```{r}
+# Define data with a variable that allows us to stratify
+s_data.dt <- generateStratifiedDomainEstimateData(n_samples = 10)
+print(s_data.dt)
+
+# Then, define the sampler
+ss_sampler <- ssSampler(key = 1:nrow(s_data.dt),
+                        strata = s_data.dt[, strata_class],
+                        ssize = c("Urban" = 3, "Rural" = 2))
+
+# And obtain a sample
+ss_sample <- getSample(ss_sampler)
+print(s_data.dt[ss_sample])
+```
+
+## bootstrapSampler
+
+This sampler generates bootstrap samples on a specified set of keys.
+Its only parameter is `key`, since the sample size is fixed, as it matches
+the size of `key`.
+
+```{r}
+b_sampler <- bootstrapSampler(key = 1:10)
+set.seed(273)
+getSample(b_sampler)
+```
+
+## fullSampler
+
+A toy sampler that has two possible outputs. If its `ssize` parameter is
+equal to `2`, it returns all possible combinations of pairs of elements from
+the dataset. If `ssize` takes another value (or is left at the default),
+it returns the full sample.
+
+```{r}
+key <- 1:6
+
+# Return all possible pair combinations
+f_smplr1 <- fullSampler(key = key, ssize = 2)
+
+s1 <- getSample(f_smplr1)
+print(s1)
+
+# Return the full sample
+f_smplr2 <- fullSampler(key = key)
+
+s2 <- getSample(f_smplr2)
+print(s2)
+```
+
+
+## cvSampler
+
+The cvSampler generates samples without replacement for k-fold cross-validation,
+so that each of its samples contains $k-1$ of the folds, and leaves one for
+validation.
+
+In case the dataset keys are not an integer multiple of the `folds` parameter,
+some partitions will contain `NA`.
+
+```{r}
+# Define a cvSampler with 5 folds
+smplr <- cvSampler(key = 1:20, folds = 5)
+set.seed(273)
+s1 <- getSample(smplr)
+
+# Folds come out of size 4, so samples will contain 4x4 elements
+print(s1)
+```
+
+Usually, this sampler will be used together with the `crossValidate` method of
+modelers to perform cross-validation.
+
+## cvGroupSampler
+
+A variant of cvSampler that instead of partitioning the data randomly
+according to their indices, generates its partitions according to a grouping or
+stratification variable. That is, it will sample over the groups that exist in
+the data, not over row indices.
+
+```{r}
+# Generate a dataset to visualize more clearly
+set.seed(273)
+# Define data (10 groups, 10 rows for each group)
+# There are 10 groups, with 10 rows each
+grouping_var <- c(sapply(paste0("Group_", 1:10), function(x){
+return(rep(x, 10))
+}, USE.NAMES = FALSE))
+measure <- rnorm(n = length(grouping_var), mean = 10, sd = 1)
+group_data.dt <- data.table(measure = measure, grouping_var = grouping_var)
+
+head(group_data.dt)
+
+# Define the sampler
+key <- 1:nrow(group_data.dt)
+identifier <- "grouping_var"
+folds <- 3
+cv_group_sampler <- cvGroupSampler(key = key,
+                                   data = group_data.dt,
+                                   identifier = identifier,
+                                   folds = folds)
+# As can be seen, the partitions contain all rows of the groups
+# that they select
+s1 <- getSample(cv_group_sampler)
+print(s1)
+table(group_data.dt[s1[, 1], grouping_var])
+table(group_data.dt[s1[, 2], grouping_var])
+table(group_data.dt[s1[, 3], grouping_var])
+```
+
+
+## cvMixedSampler
+
+Another variant of cvSampler for cases where we want to force a fixed set
+of rows to always be included in the samples, together with a variable set.
+
+Apart from `key` and `folds`, it has an additional parameter called `fixedKey`,
+which is the vector of fixed indices to always include in the sample. `key` must
+include both the fixed and the variable keys.
+
+```{r}
+all_keys <- 1:50 # There are 50 elements in the sample
+fixed_keys <- 1:20 # We want the first 20 to always be included
+
+cv_mixed_sampler <- cvMixedSampler(key = all_keys,
+                                   fixedKey = fixed_keys,
+                                   folds = 5)
+set.seed(273)
+# As can be seen, the first 20 are always there
+print(getSample(cv_mixed_sampler))
+```
+
+## cvTemporalSampler
+
+An additional variant of cvSampler, for data with temporal reference or
+periods of some kind, and where the output is required to be sorted
+chronologically.
+
+The samples it returns are an expanding and ordered temporal window. It is
+useful for training models with a number of previous periods and checking
+their performance on the most recent periods.
+
+Its definition is more complex than the rest of the samplers, because it requires
+the following arguments:
+
+key: Row indices.
+
+* `data`: Full dataset (as a data.table).
+* `identifier`: String indicating the name of the column containing the period.
+* `folds`: Number of k-folds to apply.
+* `n_valPeriods`: Periods in the validation set (assumed to be the last ones).
+* `orderPeriods`: Chronologically ordered vector of periods.
+
+```{r}
+# Define a dataset with 36 periods (monthly) and one observation per period
+# There could be more than one observation per period.
+set.seed(273)
+years <- c(2023, 2024, 2025)
+total_periods <- c(sapply(years, function(y){
+  months <- 1:12
+  months[1:9] <- paste0("0", months[1:9])
+  return(paste0("MM", months, y))
+}, USE.NAMES = FALSE))
+target <- rnorm(n = length(total_periods), mean = 10, sd = 1)
+cv_t_sampler_data.dt <- data.table::data.table(measure = target, period = total_periods)
+head(cv_t_sampler_data.dt)
+
+# Define the sampler
+cv_t_sampler <- cvTemporalSampler(key = 1:nrow(cv_t_sampler_data.dt), # keys
+                                  data = cv_t_sampler_data.dt, # data
+                                  identifier = "period", # Name of the column with periods
+                                  folds = 3, # 3 partitions
+                                  n_valPeriods = 6, # We require 2 months for validation
+                                  orderPeriods = total_periods) # Ordered periods
+
+# As can be seen, the third sample would take the last 6 months as validation,
+# the second would take 12 and the first 18.
+getSample(cv_t_sampler)
+```
+
+
+

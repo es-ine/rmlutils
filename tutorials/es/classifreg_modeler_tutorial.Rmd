@@ -1,0 +1,226 @@
+---
+title: "Tutorial de classifRegModeler"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## El objeto classifRegRegressorModeler
+
+Este objeto es uno de los modeler complejos de RMLutils. Se aplica a problemas de regresión en los que haya un número (o varios) repetidos una gran cantidad de veces en el conjunto de datos, haciéndolo inapropiado para una regresión directa.
+
+Primero, se efectúa una clasificación para determinar si la predicción es uno de los números repetidos o no. 
+En caso afirmativo, simplemente se le asigna el número resultado de la clasificación, pero en caso contrario, se pasa a la regresión para determinar el valor de la variable objetivo.
+
+Se dice que este modeler es complejo porque es la combinación de dos modelers distintos, cada uno de ellos pudiendo ser de lightgbm, catboost, etc.
+
+### Instanciado
+
+El classifRegRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `classifModeler`: Un classifierModeler de RMLutils para realizar la tarea de clasificación.
+
+- `regModeler`: Un regressorModeler de RMLutils para realizar la tarea de regresión.
+
+- `specialCats`: Números especiales en la variable objetivo, es decir, los que deberían ser clasificados en el primer paso.
+
+- `minRows`: Cantidad mínima de filas para entrenar el modelo de regresión. Si no se llega a este número tras el primer paso de clasificación, el modelo de regresión no se entrenará. Simplemente tendrá la media como output. 100 de forma predeterminada.
+
+- `epsilon`: Factor de tolerancia. Si el valor de la variable objetivo en el paso de regresión está más cerca que este valor de un valor de specialCats, se reemplaza por ese valor. 0 de forma predeterminada.
+
+- `classMapping`: Algoritmo de mapeo de clases a utilizar por el modelo de clasificación. maxScoreClass de forma predeterminada.
+
+Para este tutorial se empleará un modeler de `ranger` para clasificación y un modeler de `lightgbm` para regresión. El usuario deberá comprobar que tiene las librerías instaladas.
+
+```{r}
+#Generamos datos apropiados para el modeler en dos pasos
+set.seed(273)
+data.dt <- generateRegressionData(n_samples = 1000,
+                                  generate_random_weights = FALSE)
+
+#Convertimos una cantidad razonable de registros a cero
+data.dt[regression_target < 0, regression_target := 0]
+print(table(data.dt[, regression_target == 0]))
+#Aplicaremos un classifRegModeler para predecir primero si el resultado es distinto de 0 o no,
+#tras eso, se aplicará la regresión sobre los datos restantes.
+#Todo este proceso se gestiona internamente por el classifRegModeler
+
+#Definimos particiones de entrenamiento y test
+data.keys <- 1:nrow(data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+```
+
+Primero instanciamos los modelers internos. Debe cumplirse que ambos tengan la misma variable objetivo.
+
+```{r}
+target <- "regression_target"
+#Los regresores podrían ser distintos, pero trabajaremos con los mismos en ambos modelers
+regressors <- setdiff(names(data.dt), target)
+
+#Definimos el modelo de clasificación
+params_cls <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+
+cls_modeler <- rangerClassifierModeler(params = params_cls,
+                                       target = target,
+                                       regressors = regressors)
+#Definimos el modelo de regresión
+params_reg <- list(
+  "learning_rate" = 0.07,
+  "nrounds" = 100,
+  "objective" = "regression"
+)
+reg_modeler <- LGBRegressorModeler(params = params_reg,
+                                   target = target,
+                                   regressors = regressors)
+
+```
+
+Tras definir los modelers internos, creamos el modelo en dos pasos:
+
+```{r}
+modeler <- classifRegRegressorModeler(classifModeler = cls_modeler,
+                                      regModeler = reg_modeler,
+                                      specialCats = 0)
+```
+
+El funcionamiento de este modeler a partir de este punto es análogo al del resto de modelers, salvo por un detalle opcional en `evaluate`.
+
+### crossValidate
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = modeler,
+              data = data.dt,#Datos completos
+              CVSampler = cvSampler(key = train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+modeler <- train(object = modeler,
+                 data = data.dt,
+                 subSet = train.keys)
+```
+
+
+### getPredictions
+
+```{r}
+preds <- getPredictions(object = modeler,
+                        data = data.dt,
+                        subSet = test.keys)
+head(preds)
+```
+
+### evaluate
+
+Ya que este modeler contiene otros dos modelers, podemos querer evaluar el output final, o bien evaluar ambos modelers a la vez. El método evaluate nos permite especificar una función de coste de regresión (lo cual evaluará únicamente el output final), o bien una lista nombrada con funciones de coste para especificar la función de coste con la que evaluar cada uno de los modelers internos:
+
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+
+
+#Evaluación de ambos modelers por separado
+cf2 <- list("classifModeler" = confusionMatrixCostFunction(),
+            "regModeler" = r2CostFunction())
+
+
+#Evaluación sobre el conjunto de train de ambos modelers
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test de ambos modelers
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf2,
+         subSet = test.keys)
+```
+
+
+### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "classif_reg.mlu"
+modelSave(object = modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```

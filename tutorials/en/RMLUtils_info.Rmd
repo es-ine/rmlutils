@@ -1,0 +1,90 @@
+---
+title: "RMLUtils"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+MLUtils provides an extensible interface by design for multiple machine learning libraries, facilitating the standardization of ML tasks in the official statistics process. Additionally, it has built-in support for different sampling designs.
+
+## RMLUtils class architecture
+
+![Diagrama UML de RMLUtils](../../RMLUtils_diagram.png)<!--{#id .class width=30 height=20px}-->
+
+The main classes in MLUtils are the `modeler`, the `estimator` (which in RMLutils are functions that are called directly), the `sampler` and the `costFunction`.
+
+* `Modeler`: Acts as a high-level abstraction that can include tasks such as preprocessing.
+
+* `Estimator`: Collection of functions that handle inference at the population level.
+
+* `Sampler`: Object that handles the extraction of samples from a dataset or population. It also provides necessary metadata for inference.
+
+* `CostFunction`: Class that defines evaluation metrics, both for standard performance measures and for design-based criteria.
+
+## Tutorial structure
+
+All RMLutils objects are documented in the tutorials, with usage examples.
+
+It is recommended that the user follows the proposed order of the tutorials:
+
+1) `sampler_tutorial.Rmd`
+
+2) `modeler_tutorial.Rmd`
+
+3) `cost_function_tutorial.Rmd`
+
+4) `estimator_tutorial.Rmd`
+
+The rest of the tutorials can be reviewed in arbitrary order, depending on the user's needs. Below is a brief explanation of what each one covers:
+
+* `bench_modeler_tutorial`: Defines the benchModeler object and how to use it. It is a multivariate modeler in which the target variables must satisfy one or multiple linear constraints between them.
+
+* `classifreg_modeler_tutorial`: Describes how to use classifReg models, which are two-step modelers (a classification followed by a regression). They are particularly useful for semicontinuous data, that is, those that have one or several distinct values repeated very frequently and then a smaller proportion of data that behaves continuously.
+
+* `h2o_modeler_tutorial`: Explains how to use h2o modelers, since it is necessary to start a cloud locally or on the server where you are working for them to function.
+
+* `memory_modeler_tutorial`: Defines the memoryModeler, which is a type of modeler capable of storing internal datasets to add them when training the model.
+
+* `prepred_modeler_tutorial`: Describes the prePredModeler, also known as a chain model. It uses a combination of two modelers, where the first generates an additional regressor for the second.
+
+* `prepro_modeler_tutorial`: Covers the use of preproModelers. They are a type of modeler that execute a preprocessing step before training. This step is performed by a function that can be defined by the user, but must meet certain conditions to work with the rest of the library.

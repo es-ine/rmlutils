@@ -1,0 +1,489 @@
+---
+title: "preproModeler tutorial"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+It is recommended that the user reviews the Sampler and Modeler tutorials before reading this document.
+
+The user is reminded that all RMLutils methods and functions are
+documented. Using the help tab, or the command itself, essential documentation
+can be obtained for any object or function.
+
+**Additionally, it is important to emphasize that, to use most modelers, the user will be responsible for installing the specific library they use. To keep a lightweight installation, RMLutils does not install any of the machine learning libraries used by the modelers.**
+
+## The preproModeler, preproObject and preproFunction objects
+
+PreproModelers are one of the types of complex modelers in RMLutils, which work for both classification and regression tasks.
+
+The main characteristic of PreproModelers is that they apply a preprocessing function just before training or predicting with any modeler.
+This preprocessing function can be fully defined by the user to suit their needs.
+In order to integrate such a function with the RMLutils modeler interface, the user must make use of the preproObject. In the following code segment, one is defined with a preprocessing function already implemented in RMLutils:
+
+```{r}
+# Definition of preprocessing parameters
+prepro_params <- list(modeler_type = NULL, pretrained_min_max = NULL)
+
+# Definition of preproObject
+prepro_object <- preproObject(preproFunction = minMaxScalerPreproFunction,
+                              params = prepro_params)
+```
+
+The `minMaxScalerPreproFunction` scales the numeric variables of the dataset so that they are in the 0-1 range. Once the minimums and maximums have been calculated internally (necessary for scaling), they are saved in the preproObject parameters.
+
+## Format of the preprocessing function
+
+The preprocessing function must comply with several characteristics:
+
+1) It must take a preproObject as its only input. All parameters that the preprocessing function may need must go inside the prepro_params attribute of the PreproObject.
+
+2) All necessary parameters within prepro_params can be altered (even deleted or new ones added), but altering any other attribute of PreproObject should be avoided, except for the exception in the following point.
+
+3) The preprocessing function must overwrite the new_regressors attribute in preproObject, so that the modelers know which regressors to use. If the preprocessing function does not create/delete columns, the old regressors should be assigned as new_regressors. Likewise, the data attribute will also be altered.
+
+4) The output of the preprocessing function will be the preproObject itself, with its data attribute overwritten with the preprocessed data and new_regressors specified. Its params attribute may also be altered.
+
+If we want to preprocess the data externally (without using preproModelers), we must proceed as follows:
+
+```{r}
+# We do not instantiate the prepro_object again, we can use the previous one
+
+# Define the data
+data.dt <- generateRegressionData(n_samples = 1000,
+                                  generate_random_weights = TRUE)
+head(data.dt) # We have sampling weights. We do not want to alter these
+
+# We are going to define a "fake" modeler, as a list with the target, regressors and weightsColumn attributes
+target <- "regression_target"
+weightsColumn <- "weights"
+regressors <- setdiff(colnames(data.dt), c(target, weightsColumn))
+modeler <- list("target" = target,
+                "regressors" = regressors,
+                "weightsColumn" = weightsColumn)
+
+# Assign these data to the prepro_object, using the assignExternalAttributes function
+prepro_object <- assignExternalAttributes(modeler = modeler,
+                                          object = prepro_object)
+
+# Call getPreproData to return the preproObject with the preprocessed data
+prepro_object <- getPreproData(object = prepro_object, data = data.dt)
+
+# Since we specified the weights column, that one has not been altered (the same happens with target)
+head(prepro_object$data)
+```
+
+Below is the code of the preprocessing function we have used, so that the user can get an idea of how to program their own.
+
+```
+minMaxScalerPreproFunction <- function(object = NULL){
+
+  # Extract the necessary variables from the preproObject
+  data <- object$data
+  target <- object$target
+  regressors <- object$regressors
+  weightsColumn <- object$weightsColumn
+  modeler_type <- object$params$modeler_type
+  pretrained_min_max <- object$params$pretrained_min_max
+  
+  # modeler_type is there for compatibility with the rest of RMLutils modelers.
+  # With this we will assign a new_regressors attribute correctly
+  # according to the modeler type (at the end of the function).
+  if(is.null(modeler_type)){
+    modeler_type <- "simple"
+  }
+
+  dt <- as.data.table(data)
+
+  # Scan the dataset to detect the names of numeric columns
+  num_vars <- colnames(dt)[sapply(dt, is.numeric)]
+
+  # Define which columns should not be preprocessed (in our case, target and weightsColumn should not be touched)
+  if(any(target %in% colnames(data))){
+    if(!is.null(weightsColumn)){
+      if(weightsColumn %in% colnames(data)){
+        no_preprocessing <- c(target, weightsColumn)
+      }else{
+        no_preprocessing <- c(target)
+      }
+    }else{
+      no_preprocessing <- c(target)
+    }
+
+  }else{
+    if(!is.null(weightsColumn)){
+      if(weightsColumn %in% colnames(data)){
+        no_preprocessing <- c(weightsColumn)
+      }else{
+        no_preprocessing <- c()
+      }
+    }else{
+      no_preprocessing <- c()
+    }
+  }
+
+  # Remove the numeric variables that should not be preprocessed (they are in no_preprocessing)
+  # (i.e. weightsColumn and target)
+  num_vars <- num_vars[!num_vars %in% no_preprocessing]
+
+  # The minimum and maximum are calculated for each numeric variable
+  # This will be saved in the preproObject so that in later executions it scales
+  # the data with the first minimums and maximums it detects (and does not have to calculate them each time)
+  if(is.null(pretrained_min_max)){
+    pretrained_min_max <- lapply(num_vars, function(var){
+      return(list("min" = min(dt[[var]]),
+                  "max" = max(dt[[var]])))
+    })
+    names(pretrained_min_max) <- num_vars
+
+    # Save in the preproObject parameters
+    object$params$pretrained_min_max <- pretrained_min_max
+  }else{
+    # If there already are, we just assign them, we do not generate them again
+    pretrained_min_max <- object$params$pretrained_min_max
+  }
+
+  # Scale the numeric variables to the 0-1 range (MinMax scaling)
+  # The scaled variables are renamed to "st_" + "<original_name>"
+  for (var in num_vars){
+    dt[, paste0("st_", var) := (get(var) - pretrained_min_max[[var]]$min) / (pretrained_min_max[[var]]$max - pretrained_min_max[[var]]$min)]
+    dt[, (var) := NULL]
+  }
+
+  # Overwrite the data attribute with the preprocessed data
+  object$data <- dt
+
+  # Define the name of the new regressors and add them to the preproObject
+  prepro_regressors <- colnames(dt)
+  prepro_regressors<- prepro_regressors[! prepro_regressors %in% no_preprocessing]
+  switch (modeler_type,
+    "simple" = { # For all other modelers that do not have more than one internal modeler or are a simple model
+      object$new_regressors <- prepro_regressors
+      },
+    "classifRegModeler" = {
+      object$new_regressors <- list(
+                                  "regModeler" = prepro_regressors,
+                                  "classifModeler" = prepro_regressors)
+    },
+    "prePredModeler" = {
+      object$new_regressors <- list(
+                                  "predModeler" = prepro_regressors,
+                                  # Add target of predModeler to regressors
+                                  "mainModeler" = c(target[1], prepro_regressors))
+    },
+    "benchModeler" = {
+      object$new_regressors <- lapply(1:length(regressors), function(x){
+                                  return(prepro_regressors)
+                                })
+    },
+    {stop(paste0("The provided modeler_type parameter: ", modeler_type, " was not recognized. Available types are \n NULL, classifRegModeler, prePredModeler and benchRegressorModeler"))}
+  )
+
+  return(object)
+}
+```
+
+## preproClassifierModeler
+
+```{r}
+# Generate a dataset
+c_data.dt <- generateMulticlassClassificationData(n_samples = 1000,
+                                                  generate_random_weights = FALSE)
+
+# Define train and test partitions
+set.seed(273)
+c_data.keys <- 1:nrow(c_data.dt)
+c_train_size = round(0.8 * nrow(c_data.dt))
+c_smplr <- srsSampler(key = c_data.keys, ssize = c_train_size)
+c_train.keys <- getSample(c_smplr)
+c_test.keys <- setdiff(c_data.keys, c_train.keys)
+```
+
+### Instantiation
+
+The preproClassifierModeler requires the following parameters to be instantiated:
+
+- `modeler`: Classification modeler to predict with the data after preprocessing. It must be instantiated like any other modeler.
+
+- `preproObject`: preproObject object, containing a preprocessing function and parameters, which will store necessary attributes during the execution of the preprocessing function.
+
+In this tutorial, a ranger modeler will be used to define the `preproClassifierModeler`. The user should check that the `ranger` library is installed.
+
+We first define the internal modeler and the preproObject:
+
+```{r}
+c_target <- "classification_target"
+c_regressors <- setdiff(colnames(c_data.dt), c_target)
+c_params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+
+# Internal classification model
+c_modeler <- rangerClassifierModeler(params = c_params,
+                                     target = c_target,
+                                     regressors = c_regressors)
+
+# Preprocessing parameters
+c_prepro_params <- list(modeler_type = NULL, pretrained_min_max = NULL)
+
+# Define the preproObject
+c_prepro_object <- preproObject(preproFunction = minMaxScalerPreproFunction,
+                                params = c_prepro_params)
+```
+
+Finally, we define the preproModeler:
+
+```{r}
+pc_modeler <- preproClassifierModeler(modeler = c_modeler,
+                                      preproObject = c_prepro_object)
+```
+
+
+### crossValidate
+
+`crossValidate` returns the averaged cost for all folds.
+
+```{r}
+# Define a cost function
+cf <- accuracyCostFunction()
+crossValidate(modeler = pc_modeler,
+              data = c_data.dt,
+              CVSampler = cvSampler(key = c_train.keys, folds = 3),
+              costFunction = cf)
+```
+
+### Train
+
+```{r}
+pc_modeler <- train(pc_modeler,
+                    data = c_data.dt,
+                    subSet = c_train.keys)
+```
+
+### getPredictions
+
+When predicting, classifier modelers return a matrix of scores:
+
+```{r}
+preds <- getPredictions(object = pc_modeler,
+                        data = c_data.dt,
+                        subSet = c_test.keys)
+head(preds)
+```
+
+To get the classes directly, we must use the `getClasses` method.
+
+A particular class mapping can be specified for this object, of which there are:
+
+`maxScoreClass()`: (default), chooses the class with the highest score.
+
+`binaryThresholdClass()`: Only for binary target. Allows specifying a selection threshold for the positive class.
+
+However, since it is a multiclass modeler, it only accepts the maxScoreClass() method.
+
+```{r}
+clss <- getClasses(object = pc_modeler,
+                   data = c_data.dt,
+                   subSet = c_test.keys,
+                   class_mapping = maxScoreClass())
+head(clss)
+```
+
+### evaluate
+
+This function is a common interface for all modelers when evaluating their performance for a cost function and a specific dataset:
+
+```{r}
+# Define a cost function
+cf <- accuracyCostFunction()
+# Evaluation on the training set
+evaluate(object = pc_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_train.keys)
+# Evaluation on the test set
+evaluate(object = pc_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+# Define a save path and a file name
+m_path <- "./trained_modelers"
+m_filename <- "prepro_cls.mlu"
+modelSave(object = pc_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+# Load the model again and check that it works
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = c_data.dt,
+         cost_function = cf,
+         subSet = c_test.keys)
+```
+
+## preproRegressorModeler
+
+```{r}
+# Generate a dataset
+r_data.dt <- generateRegressionData(n_samples = 1000,
+                                    generate_random_weights = FALSE)
+
+# Define train and test partitions
+set.seed(273)
+r_data.keys <- 1:nrow(r_data.dt)
+r_train_size = round(0.8 * nrow(r_data.dt))
+r_smplr <- srsSampler(key = r_data.keys, ssize = r_train_size)
+r_train.keys <- getSample(r_smplr)
+r_test.keys <- setdiff(r_data.keys, r_train.keys)
+```
+
+### Instantiation
+
+The preproRegressorModeler requires the following parameters to be instantiated:
+
+- `modeler`: Regression modeler to predict with the data after preprocessing. It must be instantiated like any other modeler.
+
+- `preproObject`: preproObject object, containing a preprocessing function and parameters, which will store necessary attributes during the execution of the preprocessing function.
+
+In this tutorial, a ranger modeler will be used to define the preproRegressorModeler. The user should check that the `ranger` library is installed.
+
+We first define the internal modeler and the preproObject:
+
+```{r}
+r_target <- "regression_target"
+r_regressors <- setdiff(colnames(r_data.dt), r_target)
+
+# Define a regressor modeler
+r_params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+# Internal regression model
+r_modeler <- rangerRegressorModeler(params = r_params,
+                                    target = r_target,
+                                    regressors = r_regressors)
+
+# Preprocessing parameters
+r_prepro_params <- list(modeler_type = NULL, pretrained_min_max = NULL)
+
+# Define the preproObject
+r_prepro_object <- preproObject(preproFunction = minMaxScalerPreproFunction,
+                                params = r_prepro_params)
+```
+
+Finally, we define the preproModeler:
+
+```{r}
+pr_modeler <- preproRegressorModeler(modeler = r_modeler,
+                                     preproObject = r_prepro_object)
+```
+
+### crossValidate
+
+```{r}
+# Define a cost function
+cf <- r2CostFunction()
+crossValidate(modeler = pr_modeler,
+              data = r_data.dt,
+              CVSampler = cvSampler(key = r_train.keys, folds = 3),
+              costFunction = cf)
+```
+
+### Train
+
+```{r}
+pr_modeler <- train(pr_modeler,
+                    data = r_data.dt,
+                    subSet = r_train.keys)
+```
+
+### getPredictions
+
+```{r}
+preds <- getPredictions(object = pr_modeler,
+                        data = r_data.dt,
+                        subSet = r_test.keys)
+head(preds)
+```
+
+### evaluate
+
+```{r}
+# Define a cost function
+cf <- r2CostFunction()
+# Evaluation on the training set
+evaluate(object = pr_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_train.keys)
+# Evaluation on the test set
+evaluate(object = pr_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+# Define a save path and a file name
+m_path <- "./trained_modelers"
+m_filename <- "prepro_reg.mlu"
+modelSave(object = pr_modeler,
+          path = m_path,
+          fileName = m_filename)
+
+# Load the model again and check that it works
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = r_data.dt,
+         cost_function = cf,
+         subSet = r_test.keys)
+```
+

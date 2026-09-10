@@ -1,0 +1,8 @@
+.Rproj.user
+.Rhistory
+.RData
+.RDataTmp
+.Ruserdata
+*.html
+*.mlu
+catboost_info/

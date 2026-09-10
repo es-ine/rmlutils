@@ -1,0 +1,203 @@
+---
+title: "Tutorial de memoryModeler"
+author: "Jordi Verdú Naranjo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: united
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RMLutils)
+library(data.table)
+dir.create(file.path("./trained_modelers"), showWarnings = FALSE)
+```
+<!-- 
+# -*- coding: utf-8 -*-
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] Instituto Nacional de Estadística
+#
+# Este archivo forma parte del proyecto MLutils.
+#
+# Licenciado bajo la Licencia Pública de la Unión Europea (EUPL) v.1.2.
+# Puede obtener una copia de la licencia en la raiz de este proyecto o en:
+# https://eupl.eu/1.2/es/
+#
+# A menos que se indique lo contrario, este software se distribuye
+# "TAL CUAL", SIN GARANTÍAS NI CONDICIONES DE NINGÚN TIPO.
+# Consulte la licencia para conocer los términos específicos.
+#------------------------------------------------------------------------------#
+# Copyright (C) [2026] National Institute of Statistics
+#
+# This file is part of the MLutils project.
+#
+# Licensed under the European Union Public License (EUPL) v.1.2.
+# You can obtain a copy of the license at the root of this project or at:
+# https://eupl.eu/1.2/es/
+#
+# Unless otherwise indicated, this software is distributed
+# "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+# See the license for specific terms.
+#------------------------------------------------------------------------------#
+-->
+
+Se recomienda que el usuario revise los tutoriales de Sampler y Modeler antes de leer este documento.
+
+Se recuerda al usuario de que todos los métodos y funciones de RMLutils están
+documentados. Usando la pestaña help, o el propio comando, se puede obtener la
+documentación esencial sobre todo objeto o función.
+
+**Adicionalmente es importante recalcar que, para utilizar la mayoría de modelers, el usuario será responsable de instalarse la librería específica que utilice. Para mantener una instalación ligera, RMLutils no instala ninguna de las librerías de machine learning de los modelers.**
+
+## El objeto memoryRegressorModeler
+
+Este objeto es uno de los modeler complejos de RMLutils. Su principal característica es que puede almacenar datos adicionales a los proporcionados durante el entrenamiento, para complementar el proceso de entrenamiento de su modeler interno. También posee métodos adicionales que le permiten añadir o borrar datos de su memoria interna.
+
+Por diseño, no puede englobarse dentro de otro modeler complejo, pero su modeler interno puede ser cualquier otro objeto modeler de RMLutils, ya sea simple o complejo.
+
+```{r}
+#Generamos varios conjuntos de datos de las mismas características para unirlos después
+set.seed(273)
+data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000, generate_random_weights = FALSE)
+data2.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 100, generate_random_weights = FALSE)
+data3.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 50, generate_random_weights = FALSE)
+
+#Definimos las particiones de train y test
+data.keys <- 1:nrow(data.dt)
+train_size = round(0.8 * nrow(data.dt))
+smplr <- srsSampler(key = data.keys, ssize = train_size)
+train.keys <- getSample(smplr)
+test.keys <- setdiff(data.keys, train.keys)
+```
+
+
+### Instanciado
+
+El memoryRegressorModeler requiere de los siguientes parámetros para instanciarse:
+
+- `data`: Lista de conjuntos de datos (data.tables) o un único dataset.
+
+- `modeler`: Objeto modeler interno.
+
+- `maxData`: Número máximo de datasets que almacenar (5 de forma predeterminada).
+
+Para este tutorial se empleará un modeler de ranger para definir el memoryModeler. El usuario deberá comprobar que tiene la librería `ranger` instalada.
+
+Primero instanciamos el modeler interno.
+
+```{r}
+target <- "target"# Regression
+regressors <- setdiff(names(data.dt), target)
+params <- list(
+  "num.trees" = 50,
+  "max.depth" = 20
+)
+base_modeler <- rangerRegressorModeler(params = params, target = target, regressors = regressors)
+```
+
+Tras definir el modeler base, se instancia el memoryModeler:
+
+```{r}
+#Parámetros del modeler
+data <- list(data2.dt)
+maxData <- 3L
+modeler <- memoryRegressorModeler(data = data,
+                                  modeler = base_modeler,
+                                  maxData = maxData)
+```
+
+### Métodos para añadir y quitar datos
+
+Existen los siguientes métodos para gestionar la memoria interna del memoryModeler:
+
+- `addMemory`: Método para añadir datasets a los datos del memoryModeler. Los nuevos datasets se añaden al principio de la lista. Si en algún momento se excede el máximo de datasets en el modelo, se elimina el más antiguo.
+
+```{r}
+modeler <- addMemory(object = modeler,
+                     data = data3.dt)
+length(modeler$data)
+```
+
+
+- `cleanMemory`: Borra todos o un dataset específico del memoryModeler, dependiendo del parámetro index. Si se deja vacío, se borran todos. Si se especifican uno o varios, se borran los especificados.
+
+```{r}
+modeler <- cleanMemory(object = modeler, index = 2)
+```
+
+
+- `updateMemory`: Sobreescribe el dataset del índice especificado. De forma predeterminada, pisa el dataset más reciente (index = 1).
+
+```{r}
+modeler <- updateMemory(object = modeler,
+                        data = data2.dt,
+                        index = 1)
+```
+
+### crossValidate
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+#Aplicamos validación cruzada sobre el conjunto de entrenamiento
+crossValidate(modeler = modeler,
+              data = data.dt,#Datos completos
+              CVSampler = cvSampler(key = train.keys, folds = 3),#cvSampler sobre las keys de entrenamiento
+              costFunction = cf)
+```
+
+### train
+
+```{r}
+modeler <- train(modeler,
+                 data = data.dt,
+                 subSet = train.keys)
+```
+
+### getPredictions
+
+```{r}
+preds <- getPredictions(object = modeler,
+                        data = data.dt,
+                        subSet = test.keys)
+head(preds)
+```
+
+### evaluate
+
+```{r}
+#Definimos una función de coste
+cf <- r2CostFunction()
+#Evaluación sobre el conjunto de train
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = train.keys)
+#Evaluación sobre el conjunto de test
+evaluate(object = modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```
+
+### modelSave/modelLoad
+
+```{r}
+#Definimos una ruta de guardado y un nombre para el archivo
+m_path <- "./trained_modelers"
+m_filename <- "memory_reg.mlu"
+modelSave(object = modeler,
+          path = m_path,
+          fileName = m_filename)
+
+#Cargamos de nuevo el modelo y comprobamos que funciona
+loaded_modeler <- modelLoad(path = m_path, fileName = m_filename)
+evaluate(object = loaded_modeler,
+         data = data.dt,
+         cost_function = cf,
+         subSet = test.keys)
+```
