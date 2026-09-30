@@ -215,7 +215,7 @@ modelSave.H2OModeler <- function(object, path, fileName) {
   class(plainObject) <- class(object)
 
   #Save main object to disk
-  main_object_path <- paste0(path, "/", "LGBModeler", ".RData")
+  main_object_path <- paste0(path, "/", "H2OModeler", ".RData")
   save(plainObject, file = main_object_path)
 
   files_to_zip <- c(main_object_path)

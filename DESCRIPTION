@@ -1,7 +1,7 @@
 Package: RMLutils
 Type: Package
 Title: Machine Learning Utilities for Official Statistics
-Version: 1.0.0
+Version: 1.0.1
 Author: Luis Sanguiao, Carlos Sáez, Sandra Barragán, Esther Puerto, María Novás, Sergio Pardina, Álvaro García, Miguel Anguita, Jordi Verdú, Juan Ródenas, Beatriz Abad.
 Maintainer: Luis Sanguiao <luis.sanguiao.sande@ine.es>
 Description: 

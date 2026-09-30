@@ -463,11 +463,11 @@
   }
   #Throw error if it is a classifier modeler and its objective param was not set to binary or multiclass
   if(!(object$params$objective %in% c("binary", "multiclass")) & ("classifierModeler" %in% class(object))){
-    stop(paste0("The objective parameter must either be binary or multiclass for LGB"))
+    stop(paste0("The objective parameter must either be binary or multiclass for classification LGB"))
   }
   #Also throw error if its objective is not regression when it is a regressorModeler
   if(!(object$params$objective %in% c("regression")) & ("regressorModeler" %in% class(object))){
-    stop(paste0("The objective parameter must either be binary or multiclass for LGB"))
+    stop(paste0("The objective parameter must be regression for regression LGB"))
   }
   return(object)
 }
