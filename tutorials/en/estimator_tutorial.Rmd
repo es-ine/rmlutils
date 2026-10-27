@@ -65,26 +65,34 @@ The following types exist:
 - `RDomainEstimate`
 - `MCSubRBEstimate`
 - `MCSubRBDomainEstimate`
+- `MCSubRBMSEEstimate`
+- `MCSubRBMSEDomainEstimate`
 - `preTrainedEstimate`
 - `preTrainedDomainEstimate`
 
 We define the datasets to be used for all estimates.
 
 ```{r}
+N <- 10000
+n <- 1000 # Sample size of 10% of the population
 # Simple data for estimation
-data.dt <- generateEstimateData(n_samples = 1000,
+data.dt <- generateEstimateData(n_samples = N,
                                 generate_random_weights = FALSE)
 head(data.dt)
 
 # Stratified data for estimation
-st_data.dt <- generateStratifiedEstimateData(n_samples = 1000,
+st_data.dt <- generateStratifiedEstimateData(n_samples = N,
                                              generate_random_weights = FALSE)
 head(st_data.dt)
 
 # Stratified and domain data
-std_ma_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000,
+std_ma_data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 10*N,
                                                                     generate_random_weights = FALSE)
 head(std_ma_data.dt)
+
+# More complex stratified data
+sbs_data.dt <- generateSBSData(n_samples = 20000)
+head(sbs_data.dt)
 ```
 
 The first dataset consists of three columns, where each follows a normal distribution with different parameters:
@@ -97,42 +105,63 @@ The second dataset has the same target variables, but adds a stratum column and 
 
 The third dataset has a stratum column (urban/rural) and a column indicating the domain (Province_1/Province_2/Province_3). The variable `income` has a lognormal distribution with parameters 8 and 0.5, whose value scales according to the stratum. On the other hand, `cost_of_living` follows a normal distribution with parameters 1000 and 200, whose value scales according to the domain. The target variable is calculated as the difference between the previous two variables and noise proportional to the standard deviation in each stratum and domain combination is added.
 
+The fourth dataset is designed for testing model-assisted estimation
+when sampling over the population is stratified. It consists of
+simulated data on business variables, where the objective is the
+prediction of the population total of the turnover figure (revenue).
+For more information, the documentation can be consulted with the command
+`help(generateSBSData)`.
+
 ## Simple estimators
 
 ### HTEstimate
 
 ```{r}
+# Calculate the real total of each variable to compare it with the results
+totals <- sapply(colnames(data.dt), function(x){
+  return(sum(data.dt[, ..x]))
+})
+
 # Define a sampler from the keys of the first dataset
 set.seed(273)
 key <- 1:nrow(data.dt)
-srsmplr <- srsSampler(key = key, ssize = 800)
+srsmplr <- srsSampler(key = key, ssize = n)
 sample_1 <- getSample(srsmplr)
 
 # Call the function to obtain an estimate
 estim <- HTEstimate(object = srsmplr,
                     sampleKeys = sample_1,
                     sampleData = data.dt[sample_1])
-print(estim)
-
-# Since we know the theoretical distribution of each variable in the dataset
-# we can calculate the expected value of the total of the sample
-c("Target_1" = 10 * 1000,
-  "Target_2" = -20 * 1000,
-  "Target_3" = 0)
-
+print(estim$total)
 # Standard error of the estimate
 sqrt(estim$variance)
+
+# Compare with the real totals
+totals
 ```
 
 For the case of stratified sampling:
 
 ```{r}
+# Calculate the population totals
+target_cols <- c("Target_1", "Target_2", "Target_3")
+totals <- sapply(target_cols, function(x){
+  return(sum(data.dt[, ..x]))
+})
+
 # Define a sampler from the keys of the second dataset
 set.seed(273)
 key = 1:nrow(st_data.dt)
+# Stratification according to stratum size
+strata_info.dt <- st_data.dt[, .(N = .N), by = c("strata_class")]
+strata_info.dt[, sampling_factor := N/sum(N)]
+print(strata_info.dt)
+strata_sizes <- round(strata_info.dt[, sampling_factor] * n)
 sssmplr <- ssSampler(key = key,
                      strata = st_data.dt[, strata_class],
-                     ssize = c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160))
+                     ssize = c("Class_1" = strata_sizes[1],
+                               "Class_2" = strata_sizes[2],
+                               "Class_3" = strata_sizes[3]))
 sample_2 <- getSample(sssmplr)
 
 # Define the target variables
@@ -145,13 +174,11 @@ estim <- HTEstimate(object = sssmplr,
 
 print(estim$total)
 
-# Knowing the theoretical distributions:
-c("Target_1" = 500 * 10 + 300 * 1 + 200 * 20,
-  "Target_2" = 500 * (-20) + 300 * (-20) + 200 * (-20),
-  "Target_3" = 500 * 0 + 300 * 30 + 200 * 10)
-
 # Standard error of the estimate
 sqrt(estim$variance)
+
+# Compare with the real totals
+totals
 ```
 
 ### REstimate
@@ -159,19 +186,34 @@ sqrt(estim$variance)
 This function also calculates the Horvitz-Thompson estimator, but uses a different calculation for its variance in which it uses an approximation that only requires first-order selection probabilities. Its implementation requires stratification in the data, and having a series of associated sampling weights.
 
 ```{r}
+# Calculate the population totals
+target_cols <- c("Target_1", "Target_2", "Target_3")
+totals <- sapply(target_cols, function(x){
+  return(sum(data.dt[, ..x]))
+})
+
 # Define a sampler from the keys of the second dataset
 set.seed(273)
 key = 1:nrow(st_data.dt)
+# Stratification according to stratum size
+strata_info.dt <- st_data.dt[, .(N = .N), by = c("strata_class")]
+strata_info.dt[, sampling_factor := N/sum(N)]
+print(strata_info.dt)
+strata_sizes <- round(strata_info.dt[, sampling_factor] * n)
 sssmplr <- ssSampler(key = key,
                      strata = st_data.dt[, strata_class],
-                     ssize = c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160))
+                     ssize = c("Class_1" = strata_sizes[1],
+                               "Class_2" = strata_sizes[2],
+                               "Class_3" = strata_sizes[3]))
 sample_2 <- getSample(sssmplr)
 # Assume stratified sampling proportional to stratum size
 # Selection probabilities (pi) are n_h/N_h
 # Weights are the elevation factors, i.e., 1/pi
 st_data.dt[, N_h := .N , by = c("strata_class")]
 # Vector of n_h
-strata_to_sample_size <- c("Class_1" = 400, "Class_2" = 240, "Class_3" = 160)
+strata_to_sample_size <- c("Class_1" = strata_sizes[1],
+                           "Class_2" = strata_sizes[2],
+                           "Class_3" = strata_sizes[3])
 st_data.dt[, weights := N_h/strata_to_sample_size[strata_class]]
 st_data.dt[, N_h := NULL]
 strata_colummn <- "strata_class"
@@ -180,15 +222,14 @@ estim <- REstimate(data = st_data.dt[sample_2],
                    strata_colummn = strata_colummn,
                    weights_column = weights_column)
 print(estim)
-# Knowing the theoretical distributions:
-c("Target_1" = 500 * 10 + 300 * 1 + 200 * 20,
-  "Target_2" = 500 * (-20) + 300 * (-20) + 200 * (-20),
-  "Target_3" = 500 * 0 + 300 * 30 + 200 * 10)
 
 # Standard error of the estimate
 sapply(c("Target_1", "Target_2", "Target_3"), function(t){
   return(sqrt(estim[[t]]$Variance))
 })
+
+# Compare with the real totals
+totals
 ```
 
 ### MCSubRBEstimate
@@ -210,21 +251,32 @@ So, starting from the third dataset:
 4) We define and apply the estimator. We choose to apply 100 sub-samplings, although this parameter can be changed.
 
 ```{r}
+# We start from a population frame of 100000 elements, from which we will extract a
+# sample of 5% (5000).
+population.dt <- data.table::copy(std_ma_data.dt)
+# Calculate the real total
+total_real <- population.dt[, sum(target)]
+
 set.seed(273)
 # Main sampler
-data.keys <- 1:nrow(std_ma_data.dt)
+data.keys <- 1:100000
 
-train_size = round(0.8 * nrow(std_ma_data.dt))
-main_sampler <- srsSampler(key = data.keys, ssize = train_size)
+# This sample will represent the records for which we actually know the
+# target variable
+main_sampler <- srsSampler(key = data.keys, ssize = 5000)
 main_sample <- getSample(main_sampler)
 
-# sub Sampler
-sub_sampler <- srsSampler(key = main_sample, ssize = train_size*0.5)
+# Remove the target variable from the elements outside the sample
+population.dt[!main_sample, target := NA]
+
+# sub Sampler: Takes sub-samples of 70% of the size of the main sample
+sub_sampler <- srsSampler(key = main_sample, ssize = round(0.7*5000))
 
 # modeler
 target <- "target"
-regressors <- setdiff(names(std_ma_data.dt), target)
+regressors <- setdiff(names(population.dt), target)
 params <- list(
+  "mtry" = 3,
   "num.trees" = 50,
   "max.depth" = 20
 )
@@ -234,18 +286,117 @@ modeler <- rangerRegressorModeler(params = params,
 
 # Apply the estimator
 estim <- MCSubRBEstimate(auxModeler = modeler,
-                         data = std_ma_data.dt,
+                         data = population.dt,
                          mainSampler = main_sampler,
                          subSampler = sub_sampler,
                          targetVar = target,
-                         ssNumber = 100)
+                         ssNumber = 50)
 print(estim)
-print(paste0("Real value of target:", std_ma_data.dt[, sum(target)]))
+print(paste0("Real value of target:", total_real))
 print(paste0("Estimate value of target:", estim$total$value))
 print(paste0("Monte Carlo error of the estimate: ", estim$total$MC_error))
 print(paste0("Standard error of the estimate: ", sqrt(estim$variance$value)))
 print(paste0("Standard error of the Monte Carlo error estimate: ", sqrt(estim$variance$MC_error)))
 ```
+
+### MCSubRBMSEEstimate
+
+This estimator provides the biased version of the previous one, together with an
+estimate of the bias and the mean squared error of the estimator.
+
+For this one, we will use the fourth dataset, and we will define a
+stratified sampling for which the stratum with the highest variance will be exhaustive,
+so that only the others will be sampled.
+
+```{r}
+# Given a population of 20000 businesses, a sample is taken over 5000
+data.dt <- data.table::copy(sbs_data.dt)
+N_pop <- nrow(data.dt)
+n_samples <- 5000
+
+# Calculate the proportion of samples for each stratum (Neyman/minimum variance criterion)
+# Assume that these values come from a pilot survey, since we could not
+# know them otherwise, as we have no information on the variance in each stratum
+info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+info_strata.dt[, NxS := N_stratum * sdev]
+info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+print(info_strata.dt)
+
+# The very_large stratum has a very large variance compared to the
+# other two. To fix this, we will sample that stratum completely,
+# and we will apply stratified sampling on the other two.
+info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+info_strata.dt[, NxS := N_stratum * sdev]
+info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+print(info_strata.dt)
+
+small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+
+# About ~17% of the samples will go to the small stratum, the remaining ~83%
+# will go to the middle_large stratum
+exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+n_other <- n_samples - exhaustive_strata_n
+set.seed(273)
+
+# Define the mainSampler (the survey design)
+main_sampler <- ssSampler(key = 1:N_pop,
+                          ssize = c("small" = round(small_factor * n_other),
+                                    "middle_large" = round(middle_large_factor * n_other),
+                                    "very_large" = exhaustive_strata_n),
+                          strata = data.dt[, business_strata])
+main_sample <- getSample(main_sampler)
+
+# Save the real total and remove the target variable from the rows outside the
+# main sample
+true_total <- data.dt[, sum(revenue)]
+data.dt[!main_sample, revenue := NA]
+
+# Define a subSampler that will take 70% of the samples from the small
+# and middle_large strata
+ss_factor <- 0.7
+sub_sampler <- ssSampler(key = main_sample,
+                         ssize = c("small" = round(ss_factor * small_factor * n_other),
+                                   "middle_large" = round(ss_factor * middle_large_factor * n_other),
+                                   "very_large" = exhaustive_strata_n),
+                         strata = data.dt[main_sample, business_strata])
+
+# Define the modeler to use
+target <- "revenue"
+regressors <- setdiff(names(data.dt), target)
+params <- list(
+  "mtry" = 3,
+  "num.trees" = 40,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params, target, regressors)
+
+# Call the estimation function (lower ssNumber if faster but less accurate
+# results are desired)
+estim <- MCSubRBMSEEstimate(auxModeler = modeler,
+                            data = data.dt,
+                            mainSampler = main_sampler,
+                            mainSample = main_sample,
+                            subSampler = sub_sampler,
+                            targetVar = target,
+                            ssNumber = 500)
+
+
+print(paste0("True total: ", true_total))
+print("-----------------------")
+print("Estimate values:")
+print("-----------------------")
+print(paste0("Total estimate (with bias): ", estim$revenue$estimate))
+print(paste0("Bias estimate: ", estim$revenue$bias))
+print(paste0("Total estimate (with bias correction): ", estim$revenue$estimate + estim$revenue$bias))
+print(paste0("MSE of total estimate: ", estim$revenue$mse))
+print(paste0("Monte Carlo error of total estimate: ", estim$revenue$mcerror))
+```
+
+A low value of `ssNumber` can cause negative MSE values to appear.
+This indicates that the MSE estimate is not significantly different from zero,
+compared with the Monte Carlo error. In these cases it is recommended to increase
+`ssNumber`.
 
 ### preTrainedEstimate
 
@@ -254,7 +405,7 @@ This function assumes that we have a model that provides sufficiently reasonable
 ```{r}
 # Define a sampler to obtain train and test partitions
 data.keys <- 1:nrow(std_ma_data.dt)
-train_size = round(0.8 * nrow(data.dt))
+train_size = round(0.1 * nrow(std_ma_data.dt))
 smplr <- srsSampler(key = data.keys, ssize = train_size)
 train.keys <- getSample(smplr)
 test.keys <- setdiff(data.keys, train.keys)
@@ -291,7 +442,7 @@ For simple random sampling:
 # Define a sampler from the keys of the third dataset
 set.seed(273)
 key <- 1:nrow(std_ma_data.dt)
-srsmplr <- srsSampler(key = key, ssize = 800)
+srsmplr <- srsSampler(key = key, ssize = n)
 sample_1 <- getSample(srsmplr)
 
 # Separate the domains and define the target variables
@@ -304,8 +455,10 @@ estim <- HTDomainEstimate(object = srsmplr,
                           sampleData = std_ma_data.dt[sample_1, ..target_cols],
                           domains = std_ma_data.dt[sample_1, domain_class])
 print(estim)
-print(paste0("Real value of total income: ", std_ma_data.dt[, sum(income), by = c("domain_class")]))
-print(paste0("Real value of total cost_of_living: ", std_ma_data.dt[, sum(cost_of_living), by = c("domain_class")]))
+print("Real value of total income: ")
+print(std_ma_data.dt[, .(total_by_domain = sum(income)), by = c("domain_class")])
+print(paste0("Real value of total cost_of_living: "))
+print(std_ma_data.dt[, .(total_by_domain = sum(cost_of_living)), by = c("domain_class")])
 ```
 
 For stratified sampling:
@@ -313,6 +466,7 @@ For stratified sampling:
 ```{r}
 # Define a sampler from the keys of the second dataset
 set.seed(273)
+
 key = 1:nrow(std_ma_data.dt)
 sssmplr <- ssSampler(key = key,
                      strata = std_ma_data.dt[, strata_class],
@@ -342,22 +496,28 @@ data_copy.dt <- data.table::copy(std_ma_data.dt)
 data_copy.dt[, target := NULL]
 # Define a sampler from the keys of the third dataset
 set.seed(273)
+strata_info.dt <- data_copy.dt[, .(N = .N), by = c("strata_class")]
+strata_info.dt[, sampling_factor := N/sum(N)]
+print(strata_info.dt)
 key = 1:nrow(data_copy.dt)
+# Here, the sample is 1% of the population, with proportional allocation to stratum size
 sssmplr <- ssSampler(key = key,
                      strata = data_copy.dt[, strata_class],
-                     ssize = c("Rural" = 408, "Urban" = 392))
+                     ssize = c("Rural" = n * strata_info.dt[, sampling_factor][1],
+                               "Urban" = n * strata_info.dt[, sampling_factor][2]))
 sample_2 <- getSample(sssmplr)
 # Assume stratified sampling proportional to stratum size
 # Selection probabilities (pi) are n_h/N_h
 # Weights are the elevation factors, i.e., 1/pi
 data_copy.dt[, N_h := .N , by = c("strata_class")]
 # Vector of n_h
-strata_to_sample_size <- c("Rural" = 408, "Urban" = 392)
+strata_to_sample_size <- c("Rural" = n * strata_info.dt[, sampling_factor][1],
+                           "Urban" = n * strata_info.dt[, sampling_factor][2])
 data_copy.dt[, weights := N_h/strata_to_sample_size[strata_class]]
 data_copy.dt[, N_h := NULL]
 
 strata_colummn <- "strata_class"
-domain_column <- "domain_class"
+domain_column <- "domain_column"
 weights_column <- "weights"
 
 estim <- RDomainEstimate(data = data_copy.dt[sample_2,],
@@ -378,12 +538,11 @@ set.seed(273)
 # Main sampler
 data.keys <- 1:nrow(std_ma_data.dt)
 
-train_size = round(0.8 * nrow(std_ma_data.dt))
-main_sampler <- srsSampler(key = data.keys, ssize = train_size)
+main_sampler <- srsSampler(key = data.keys, ssize = n)
 main_sample <- getSample(main_sampler)
 
 # sub Sampler
-sub_sampler <- srsSampler(key = main_sample, ssize = train_size*0.5)
+sub_sampler <- srsSampler(key = main_sample, ssize = n * 0.5)
 
 # modeler
 target <- "target"
@@ -405,12 +564,115 @@ estim <- MCSubRBDomainEstimate(auxModeler = modeler,
                                domains = std_ma_data.dt[, domain_class],
                                ssNumber = 100)
 print(estim)
-print(paste0("Real value of target: ", std_ma_data.dt[, sum(target), by = c("domain_class")][, V1]))
+print(paste0("Real value of target: "))
+print(std_ma_data.dt[, .(total = sum(target)), by = c("domain_class")])
 print(paste0("Estimate value of target: ", estim$total$value))
 print(paste0("Monte Carlo error of the estimate: ", estim$total$MC_error))
 print(paste0("Standard error of the estimate: ", sqrt(estim$variance$value)))
 print(paste0("Standard error of the Monte Carlo error estimate: ", sqrt(estim$variance$MC_error)))
 ```
+
+### MCSubRBMSEEstimate
+
+Its use is analogous to the simple case, except that it requires the name of the domain column to be provided.
+
+```{r}
+# Given a population of 20000 businesses, a sample is taken over 5000
+data.dt <- data.table::copy(sbs_data.dt)
+N_pop <- nrow(data.dt)
+n_samples <- 5000
+
+# Calculate the proportion of samples for each stratum (Neyman/minimum variance criterion)
+# Assume that these values come from a pilot survey, since we could not
+# know them otherwise, as we have no information on the variance in each stratum
+info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+info_strata.dt[, NxS := N_stratum * sdev]
+info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+print(info_strata.dt)
+
+# The very_large stratum has a very large variance compared to the
+# other two. To fix this, we will sample that stratum completely,
+# and we will apply stratified sampling on the other two.
+info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+info_strata.dt[, NxS := N_stratum * sdev]
+info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+print(info_strata.dt)
+
+small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+
+# About ~17% of the samples will go to the small stratum, the remaining ~83%
+# will go to the middle_large stratum
+exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+n_other <- n_samples - exhaustive_strata_n
+set.seed(273)
+
+# Define the mainSampler (the survey design)
+main_sampler <- ssSampler(key = 1:N_pop,
+                          ssize = c("small" = round(small_factor * n_other),
+                                    "middle_large" = round(middle_large_factor * n_other),
+                                    "very_large" = exhaustive_strata_n),
+                          strata = data.dt[, business_strata])
+main_sample <- getSample(main_sampler)
+
+# Save the real total and remove the target variable from the rows outside the
+# main sample
+true_total <- data.dt[, sum(revenue)]
+data.dt[!main_sample, revenue := NA]
+
+# Define a subSampler that will take 70% of the samples from the small
+# and middle_large strata
+ss_factor <- 0.7
+sub_sampler <- ssSampler(key = main_sample,
+                         ssize = c("small" = round(ss_factor * small_factor * n_other),
+                                   "middle_large" = round(ss_factor * middle_large_factor * n_other),
+                                   "very_large" = exhaustive_strata_n),
+                         strata = data.dt[main_sample, business_strata])
+
+# Define the modeler to use
+target <- "revenue"
+regressors <- setdiff(names(data.dt), target)
+params <- list(
+  "mtry" = 3,
+  "num.trees" = 40,
+  "max.depth" = 20
+)
+modeler <- rangerRegressorModeler(params, target, regressors)
+
+# Define the name of the domain column
+domainColumn <- "activity_type"
+
+# Call the estimation function (lower ssNumber if faster but less accurate
+# results are desired)
+estim <- MCSubRBMSEDomainEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  domainColumn = domainColumn,
+                                  ssNumber = 500)
+
+print(paste0("True total: ", true_total))
+print("-----------------------")
+print("Estimate values:")
+print("-----------------------")
+print(paste0("Total estimate (with bias): ", sum(estim$revenue$estimate)))
+print(paste0("Bias estimate: ", sum(estim$revenue$bias)))
+print(paste0("Total estimate (with bias correction): ", sum(estim$revenue$estimate + estim$revenue$bias)))
+print(estim)
+```
+
+A low value of `ssNumber` can cause negative MSE values to appear.
+This indicates that the MSE estimate is not significantly different from zero,
+compared with the Monte Carlo error. In these cases it is recommended to increase
+`ssNumber`.
+
+It can also happen (depending on the size of the sub-samples and the
+number of domains) that for some of the sub-samples the variance of the estimate
+cannot be calculated. In this case, a warning is raised indicating how many
+times it has occurred for each domain. If the failure count is very large, it is
+advisable for the user to review the design of the `subSampler`.
 
 ### preTrainedDomainEstimate
 
@@ -419,7 +681,7 @@ Its use is analogous to the simple case, except that it requires the domain colu
 ```{r}
 # Define a sampler to obtain train and test partitions
 data.keys <- 1:nrow(std_ma_data.dt)
-train_size = round(0.8 * nrow(data.dt))
+train_size = round(0.1 * nrow(data.dt))
 smplr <- srsSampler(key = data.keys, ssize = train_size)
 train.keys <- getSample(smplr)
 test.keys <- setdiff(data.keys, train.keys)
@@ -439,6 +701,6 @@ modeler <- train(modeler, data = std_ma_data.dt, subSet = train.keys)
 preds <- preTrainedDomainEstimate(modeler, data = std_ma_data.dt, domain_column = "domain_class")
 print(preds)
 # Compare with the real total of the dataset
-print(std_ma_data.dt[, sum(target), by = c("domain_class")])
+print(std_ma_data.dt[, .(totals = sum(target)), by = c("domain_class")])
 ```
 

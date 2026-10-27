@@ -62,3 +62,9 @@ getTarget.default <- function(object) {
 getTarget.prePredModeler <- function(object) {
   return(RMLutils::getTarget(object$mainModeler))
 }
+
+#' @rdname getTarget
+#' @export
+getTarget.memoryModeler <- function(object) {
+  return(RMLutils::getTarget(object$modeler))
+}

@@ -94,6 +94,8 @@ By using this repository, you acknowledge that:
     * RDomainEstimate
     * MCSubRBEstimate
     * MCSubRBDomainEstimate
+    * MCSubRBMSEEstimate
+    * MCSubRBMSEDomainEstimate
     * preTrainedEstimate
     * preTrainedDomainEstimate
 

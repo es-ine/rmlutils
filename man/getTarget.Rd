@@ -5,6 +5,7 @@
 \alias{getTarget.benchModeler}
 \alias{getTarget.default}
 \alias{getTarget.prePredModeler}
+\alias{getTarget.memoryModeler}
 \title{Returns target variables}
 \usage{
 getTarget(object)
@@ -14,6 +15,8 @@ getTarget(object)
 \method{getTarget}{default}(object)
 
 \method{getTarget}{prePredModeler}(object)
+
+\method{getTarget}{memoryModeler}(object)
 }
 \arguments{
 \item{object}{\code{\link{modeler}} object.}

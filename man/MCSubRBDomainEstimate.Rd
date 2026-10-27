@@ -54,6 +54,7 @@ Sanguiao-Zhang (2020) (https://arxiv.org/abs/2003.11423) by domains. For a more
 in-depth explanation, check \code{\link{MCSubRBEstimate}} documentation.
 }
 \examples{
+#The example may take a few seconds to run
 #Generate data
 set.seed(273)
 data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000, generate_random_weights = FALSE)
@@ -98,5 +99,7 @@ print(paste0("Standard error for the estimate of the Monte Carlo error: ", sqrt(
 
 \code{\link{MCSubRBEstimate}}
 
-\code{\link{biasVarianceEstimate}}
+\code{\link{MCSubRBMSEEstimate}}
+
+\code{\link{MCSubRBMSEDomainEstimate}}
 }

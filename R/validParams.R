@@ -122,8 +122,76 @@
 }
 
 #' @noRd
+.validate_MCSubRBMSEEstimate <- function(auxModeler,
+                                         data,
+                                         mainSampler,
+                                         mainSample,
+                                         subSampler,
+                                         targetVar,
+                                         ssNumber){
+  if(!inherits(auxModeler, "regressorModeler")){
+    stop(paste0("auxModeler must be a regressorModeler, but got a ", paste0(class(auxModeler), collapse = " "), " instead."))
+  }
+
+  if(!inherits(mainSampler, "sampler")){
+    stop(paste0("mainSampler must be a sampler, but got a ", paste0(class(mainSampler), collapse = " "), " instead."))
+  }
+
+  if(!inherits(subSampler, "sampler")){
+    stop(paste0("subSampler must be a sampler, but got a ", paste0(class(subSampler), collapse = " "), " instead."))
+  }
+
+  #Consistency checks for the samplers
+  if(!all(mainSampler$key == 1:nrow(data))){
+    stop(paste0("The mainSampler key should match the data indexes, i.e. 1:nrow(data)."))
+  }
+  if(!all(mainSample %in% mainSampler$key)){
+    stop(paste0("The mainSample must be a subset of the mainSampler key."))
+  }
+  if(!all(sort(subSampler$key) == sort(mainSample)))
+    stop(paste0("The subSampler keys must be equal to the mainSample."))
+
+  #Remaining checks
+  if(!inherits(targetVar, "character")){
+    stop(paste0("targetVar must be a string, but got a ", paste0(class(targetVar), collapse = " "), " instead."))
+  }
+
+  if(!targetVar %in% getTarget(auxModeler)){
+    stop(paste0("targetVar: ", targetVar, " was not found among the auxModeler targets: ", paste0(getTarget(auxModeler), collapse = ", ")))
+  }
+
+  if(!inherits(ssNumber, "numeric")){
+    stop(paste0("ssNumber must be an integer, but got a ", paste0(class(ssNumber), collapse = " "), " instead."))
+  }
+}
+
+#' @noRd
+.validate_MCSubRBMSEDomainEstimate <- function(auxModeler,
+                                               data,
+                                               mainSampler,
+                                               mainSample,
+                                               subSampler,
+                                               targetVar,
+                                               domainColumn,
+                                               ssNumber){
+  #Check that all domains are represented in the main sample
+  if(!all(data[, unique(get(domainColumn))] %in% data[mainSample, unique(get(domainColumn))])){
+    stop("Some domains are not represented in the mainSample. Please review your inputs or sampling design.")
+  }
+  #Make similar checks to simple MSEEstimate
+  RMLutils:::.validate_MCSubRBMSEEstimate(auxModeler,
+                                          data,
+                                          mainSampler,
+                                          mainSample,
+                                          subSampler,
+                                          targetVar,
+                                          ssNumber)
+
+}
+
+#' @noRd
 .validate_biasVarianceEstimate <- function(cSampler, errorsKeys, errors){
-  if(!"sampler" %in% class(cSampler)){
+  if(!inherits(cSampler, "sampler")){
     stop(paste0("cSampler must be a sampler, but got a ", class(cSampler), " instead."))
   }
 }

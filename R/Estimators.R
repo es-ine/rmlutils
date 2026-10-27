@@ -503,7 +503,8 @@ RDomainEstimate.default <- function(data, strata_colummn, domain_column, weights
 #'
 #' @seealso \code{\link{estimator}}
 #' @seealso \code{\link{MCSubRBDomainEstimate}}
-#' @seealso \code{\link{biasVarianceEstimate}}
+#' @seealso \code{\link{MCSubRBMSEEstimate}}
+#' @seealso \code{\link{MCSubRBMSEDomainEstimate}}
 #'
 #' @import data.table
 #'
@@ -603,11 +604,13 @@ MCSubRBEstimate.regressorModeler <- function(auxModeler, data, mainSampler, subS
 #'
 #' @seealso \code{\link{estimator}}
 #' @seealso \code{\link{MCSubRBEstimate}}
-#' @seealso \code{\link{biasVarianceEstimate}}
+#' @seealso \code{\link{MCSubRBMSEEstimate}}
+#' @seealso \code{\link{MCSubRBMSEDomainEstimate}}
 #'
 #' @import data.table
 #'
 #' @examples
+#' #The example may take a few seconds to run
 #' #Generate data
 #' set.seed(273)
 #' data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000, generate_random_weights = FALSE)
@@ -654,7 +657,7 @@ MCSubRBDomainEstimate <- function(auxModeler, data, mainSampler, subSampler,
                                              ssNumber)
   UseMethod("MCSubRBDomainEstimate")
 }
-#'
+
 #' @rdname MCSubRBDomainEstimate
 #' @export
 MCSubRBDomainEstimate.regressorModeler <- function(auxModeler, data, mainSampler, subSampler,
@@ -692,6 +695,514 @@ MCSubRBDomainEstimate.regressorModeler <- function(auxModeler, data, mainSampler
 
   return(output)
 }
+
+#' @title Monte Carlo Subsampling Rao-Blackwellized Estimate (Biased)
+#'
+#' @description A function that outputs the estimator, bias, MSE and Monte Carlo error of
+#' the estimator based on Zhang, L.-C., Sanguiao-Sande, L., & Lee, D.
+#' (2025). Design-Based Predictive Inference. Journal of Official Statistics,
+#' 41(1), 404-432. \url{https://journals.sagepub.com/doi/10.1177/0282423X241277719}
+#' It is the implementation of theorem 1.
+#'
+#' @param auxModeler A regressorModeler object to use for model-assisted
+#'  estimation on each subSample.
+#' @param data A dataset containing the target variable of interest along with
+#'  other covariates used for model-assisted estimation.
+#'  It should contain the data for the whole population.
+#' @param mainSampler Sampler used to define the keys of the subSampler
+#'  Its keys should match the data indexes, i.e. `1:nrow(data)`.
+#' @param mainSample A key set indicating the rows where the target variable is
+#' available. i.e., the actual sample that was extracted from the population.
+#' @param subSampler Sampler used to get ssNumber samples from the target
+#'  variable. Note that its key should be defined as `1:length(main_sample)`.
+#' @param targetVar Name of the target variable in the dataset.
+#' @param ssNumber Amount of times to sub-sample.
+#'  If ssNumber is too low, the MSE may appear negative.
+#'  This indicates that the algorithm does not converge properly (even if the
+#'  estimate is close to the true total), because the MSE estimation is smaller
+#'  than the Monte Carlo Error, hence, making its estimate non-significative.
+#'  Consider increasing the ssNumber in that case.
+#'
+#' @return A list of lists containing the estimate, its MSE, bias (with opposite
+#'  sign) and the associated Monte Carlo errors.
+#'
+#' @seealso \code{\link{estimator}}
+#' @seealso \code{\link{MCSubRBEstimate}}
+#' @seealso \code{\link{MCSubRBDomainEstimate}}
+#' @seealso \code{\link{MCSubRBMSEDomainEstimate}}
+#'
+#' @import data.table
+#'
+#' @examples
+#' #Example may take a while to run
+#' #Population size
+#' N <- 20000
+#' #Sample size
+#' n <- 5000
+#'
+#' data.dt <- generateSBSData(N)
+#'
+#' #Calculate proportion of samples for each strata (minimal variance/Neyman criterion)
+#' #Let us assume that these values come from a pilot survey, as we would not know the true variance in each stratum.
+#' info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' #For all strata
+#' #info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' info_strata.dt[, NxS := N_stratum * sdev]
+#' info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+#' print(info_strata.dt)
+#'
+#' #The very_large strata has a very high variance, so most samples would go for
+#' #that one. Instead, let us sample that strata in its entirety and define
+#' #a stratified sampling for the remaining two strata.
+#' info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' info_strata.dt[, NxS := N_stratum * sdev]
+#' info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+#' print(info_strata.dt)
+#'
+#' small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+#' middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+#'
+#' #~17% should go to small strata and ~83% to medium_large strata
+#' exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+#' n_other <- n - exhaustive_strata_n#exhaustive_strata_n goes to cover the entirety of the very_large stratum
+#' set.seed(273)
+#' #Define mainSampler
+#' main_sampler <- ssSampler(key = 1:N,
+#'                           ssize = c("small" = round(small_factor * n_other),
+#'                                     "middle_large" = round(middle_large_factor * n_other),
+#'                                     "very_large" = exhaustive_strata_n),
+#'                           strata = data.dt[, business_strata])
+#' main_sample <- getSample(main_sampler)
+#'
+#' #Obtain the true total, then remove target variable outside the main sample
+#' true_total <- data.dt[, sum(revenue)]
+#' data.dt[!main_sample, revenue := NA]
+#'
+#' #Define subSampler (Take 70% of the original size for the smaller strata)
+#' #sub_sampler <- ssSampler(key = 1:length(main_sample),
+#' ss_factor <- 0.7
+#' sub_sampler <- ssSampler(key = main_sample,
+#'                          ssize = c("small" = round(ss_factor * small_factor * n_other),
+#'                                    "middle_large" = round(ss_factor * middle_large_factor * n_other),
+#'                                    "very_large" = exhaustive_strata_n),
+#'                          strata = data.dt[main_sample, business_strata])
+#'
+#' #Define modeler
+#' target <- "revenue"
+#' regressors <- setdiff(names(data.dt), target)
+#' params <- list(
+#'   "mtry" = 3,
+#'   "num.trees" = 40,
+#'   "max.depth" = 20
+#' )
+#' modeler <- rangerRegressorModeler(params, target, regressors)
+#'
+#' #Call estimate function
+#' estim <- MCSubRBMSEEstimate(auxModeler = modeler,
+#'                             data = data.dt,
+#'                             mainSampler = main_sampler,
+#'                             mainSample = main_sample,
+#'                             subSampler = sub_sampler,
+#'                             targetVar = target,
+#'                             ssNumber = 100)
+#'
+#'
+#' print(paste0("True total: ", true_total))
+#' print("-----------------------")
+#' print("Estimate values:")
+#' print("-----------------------")
+#' print(paste0("Total estimate (with bias): ", estim$revenue$estimate))
+#' print(paste0("Bias estimate: ", estim$revenue$bias))
+#' print(paste0("Total estimate (with bias correction): ", estim$revenue$estimate - estim$revenue$bias))
+#' print(paste0("MSE of total estimate: ", estim$revenue$mse))
+#' print(paste0("Monte Carlo error of total estimate: ", estim$revenue$mcerror))
+#' @export
+MCSubRBMSEEstimate <- function(auxModeler,
+                               data,
+                               mainSampler,
+                               mainSample,
+                               subSampler,
+                               targetVar,
+                               ssNumber = 50) {
+  RMLutils:::.validate_MCSubRBMSEEstimate(auxModeler,
+                                          data,
+                                          mainSampler,
+                                          mainSample,
+                                          subSampler,
+                                          targetVar,
+                                          ssNumber)
+  UseMethod("MCSubRBMSEEstimate")
+}
+
+#' @rdname MCSubRBMSEEstimate
+#' @export
+MCSubRBMSEEstimate.regressorModeler <- function(auxModeler,
+                                                data,
+                                                mainSampler,
+                                                mainSample,
+                                                subSampler,
+                                                targetVar,
+                                                ssNumber = 50){
+  #Variables to store outputs
+  vy1Star <- double(ssNumber)
+  vvariancebias <- double(ssNumber)
+  vvariancebias2 <- double(ssNumber)
+  vbias <- double(ssNumber)
+  vbiasSquared <- double(ssNumber)
+
+  #Cast to data.table
+  data <- data.table::as.data.table(data)
+
+  #Proper implementation
+  mainSample <- sort(mainSample)#Its indexes refer to the entire population (data)
+
+  #Save rows where target variable is NA (non-sample data)
+  nonSampleData <- data[setdiff(mainSampler$key, mainSample),]
+
+  #Get all subsamples from the mainSample (subSampler$key = mainSample)
+  samples <- getSample(subSampler, times = ssNumber)
+  for(i in 1:ssNumber){
+    #Extract current subsample (the one that will be used to train the model)
+    currentSample_s1 <- sort(samples[, i])
+
+    #Calculate complementary sample of currentSample
+    complementarySample_s2 <- sort(setdiff(subSampler$key, currentSample_s1))
+
+    #Train auxModeler with currentSample
+    auxModeler <- train(auxModeler, data, currentSample_s1)
+
+    ## Predict over ALL the data that the model has not seen
+
+    #The model is already trained over s1
+    #s1 is currentSample_s1, the subset of mainSample that the model has seen.
+    #The following are the predictions over the data that is ouside the mainSample (i.e. target is unknown)
+    predictionsNSD <- getPredictions(auxModeler, nonSampleData)
+    #Subset of mainSample that the model has not seen (s2).
+    #These are the predictions inside s2
+    predictionss2 <- getPredictions(auxModeler, data, complementarySample_s2)
+
+    #Define conditioned sampler
+    #This will provide samples that do not contain any element of s1,
+    #but may contain any other element from the entire population
+    #Its key size is now N - length(s1)
+    cSampler <- conditionedSampler(mainSampler, currentSample_s1)
+
+    ## Bias estimation
+
+    #Compare the error with the data that the model has not seen (and where we know the true value of the target variable)
+    errors <- predictionss2 - as.matrix(data[complementarySample_s2, targetVar, with = F])[, 1]
+
+    varianceBias <- RMLutils:::biasVarianceEstimate(cSampler, complementarySample_s2, errors)
+
+    ## Single sample estimate
+    ysSum <- sum(as.matrix(data[mainSample, targetVar, with = F])[, 1])#True values
+    y1Star <- ysSum + sum(predictionsNSD)#Add up known values and predicted values outside the sample
+
+    #Store all outputs
+    vy1Star[i] <- y1Star
+    vvariancebias[i] <- varianceBias$vb
+    vvariancebias2[i] <- varianceBias$vb2
+    vbias[i] <- varianceBias$bias
+    vbiasSquared[i] <- (varianceBias$bias)^2
+  }
+
+  ## Compute final estimates averaging the results
+
+  yRbMC <- mean(vy1Star)
+  mseComponents <- vbiasSquared - vvariancebias + vvariancebias2 - (vy1Star - yRbMC)^2
+  bias <- mean(vbias)
+  mse <- mean(mseComponents)
+  mcerror <- sd(mseComponents) / sqrt(length(mseComponents))
+
+  estim <- list(
+    list(
+    "estimate" = yRbMC,
+    "bias" = bias,
+    "mse" = mse,
+    "mcerror" = mcerror
+    )
+  )
+
+  names(estim) <- targetVar
+
+  return(estim)
+}
+
+#' @title Monte Carlo Subsampling Rao-Blackwellized Estimate by Domains (Biased)
+#'
+#' @description A function that outputs, for each domain, the estimator, bias,
+#' MSE and Monte Carlo error of the estimator based on Zhang, L.-C.,
+#' Sanguiao-Sande, L., & Lee, D. (2025). Design-Based Predictive Inference.
+#' Journal of Official Statistics, 41(1), 404-432.
+#' \url{https://journals.sagepub.com/doi/10.1177/0282423X241277719}
+#'
+#'
+#' @param auxModeler A regressorModeler object to use for model-assisted
+#'  estimation on each subSample.
+#' @param data A dataset containing the target variable of interest along with
+#'  other covariates used for model-assisted estimation.
+#'  It should contain the data for the whole population.
+#' @param mainSampler Sampler used to define the keys of the subSampler
+#'  Its keys should match the data indexes, i.e. `1:nrow(data)`.
+#' @param mainSample A key set indicating the rows where the target variable is
+#' available. i.e., the actual sample that was extracted from the population.
+#' @param subSampler Sampler used to get ssNumber samples from the target
+#'  variable. Note that its key should be defined as `1:length(main_sample)`.
+#' @param targetVar Name of the target variable in the dataset.
+#' @param domainColumn Name of the domain column in the data.
+#' @param ssNumber Amount of times to sub-sample.
+#'  If ssNumber is too low, the MSE may appear negative.
+#'  This indicates that the algorithm does not converge properly (even if the
+#'  estimate is close to the true total), because the MSE estimation is smaller
+#'  than the Monte Carlo Error, hence, making its estimate non-significative.
+#'  Consider increasing the ssNumber in that case.
+#'
+#' @return A list of lists containing the estimate, its MSE, bias (with opposite
+#'  sign) and the associated Monte Carlo errors.
+#'
+#' @seealso \code{\link{estimator}}
+#' @seealso \code{\link{MCSubRBEstimate}}
+#' @seealso \code{\link{MCSubRBDomainEstimate}}
+#' @seealso \code{\link{MCSubRBMSEEstimate}}
+#'
+#' @import data.table
+#'
+#' @examples
+#' #Example may take a while to run
+#' #Population size
+#' N <- 20000
+#' #Sample size
+#' n <- 5000
+#'
+#' data.dt <- generateSBSData(N)
+#'
+#' #Calculate proportion of samples for each strata (minimal variance/Neyman criterion)
+#' #Let us assume that these values come from a pilot survey, as we would not know the true variance in each stratum.
+#' info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' #For all strata
+#' #info_strata.dt <- data.dt[, .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' info_strata.dt[, NxS := N_stratum * sdev]
+#' info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+#' print(info_strata.dt)
+#'
+#' #The very_large strata has a very high variance, so most samples would go for
+#' #that one. Instead, let us sample that strata in its entirety and define
+#' #a stratified sampling for the remaining two strata.
+#' info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+#' info_strata.dt[, NxS := N_stratum * sdev]
+#' info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+#' print(info_strata.dt)
+#'
+#' small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+#' middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+#'
+#' #~17% should go to small strata and ~83% to medium_large strata
+#' exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+#' n_other <- n - exhaustive_strata_n#exhaustive_strata_n goes to cover the entirety of the very_large stratum
+#' set.seed(273)
+#' #Define mainSampler
+#' main_sampler <- ssSampler(key = 1:N,
+#'                           ssize = c("small" = round(small_factor * n_other),
+#'                                     "middle_large" = round(middle_large_factor * n_other),
+#'                                     "very_large" = exhaustive_strata_n),
+#'                           strata = data.dt[, business_strata])
+#' main_sample <- getSample(main_sampler)
+#'
+#' #Obtain the true total, then remove target variable outside the main sample
+#' true_total <- data.dt[, sum(revenue)]
+#' data.dt[!main_sample, revenue := NA]
+#'
+#' #Define subSampler (Take 70% of the original size for the smaller strata)
+#' #sub_sampler <- ssSampler(key = 1:length(main_sample),
+#' ss_factor <- 0.7
+#' sub_sampler <- ssSampler(key = main_sample,
+#'                          ssize = c("small" = round(ss_factor * small_factor * n_other),
+#'                                    "middle_large" = round(ss_factor * middle_large_factor * n_other),
+#'                                    "very_large" = exhaustive_strata_n),
+#'                          strata = data.dt[main_sample, business_strata])
+#'
+#' #Define modeler
+#' target <- "revenue"
+#' regressors <- setdiff(names(data.dt), target)
+#' params <- list(
+#'   "mtry" = 3,
+#'   "num.trees" = 40,
+#'   "max.depth" = 20
+#' )
+#' modeler <- rangerRegressorModeler(params, target, regressors)
+#'
+#' estim <- MCSubRBMSEDomainEstimate(auxModeler = modeler,
+#'                                   data = data.dt,
+#'                                   mainSampler = main_sampler,
+#'                                   mainSample = main_sample,
+#'                                   subSampler = sub_sampler,
+#'                                   targetVar = target,
+#'                                   domainColumn = domainColumn,
+#'                                   ssNumber = 100)
+#'
+#' print(paste0("True total: ", true_total))
+#' print("-----------------------")
+#' print("Estimate values:")
+#' print("-----------------------")
+#' print(paste0("Total estimate (with bias): ", sum(estim$revenue$estimate)))
+#' print(paste0("Bias estimate: ", sum(estim$revenue$bias)))
+#' print(paste0("Total estimate (with bias correction): ", sum(estim$revenue$estimate - estim$revenue$bias)))
+#' #The output contains metrics for every domain
+#' print(estim)
+#' @export
+MCSubRBMSEDomainEstimate <- function(auxModeler,
+                                     data,
+                                     mainSampler,
+                                     mainSample,
+                                     subSampler,
+                                     targetVar,
+                                     domainColumn,
+                                     ssNumber = 50) {
+  RMLutils:::.validate_MCSubRBMSEDomainEstimate(auxModeler,
+                                                data,
+                                                mainSampler,
+                                                mainSample,
+                                                subSampler,
+                                                targetVar,
+                                                domainColumn,
+                                                ssNumber)
+  UseMethod("MCSubRBMSEDomainEstimate")
+}
+
+#' @rdname MCSubRBMSEDomainEstimate
+#' @export
+MCSubRBMSEDomainEstimate.regressorModeler <- function(auxModeler,
+                                                      data,
+                                                      mainSampler,
+                                                      mainSample,
+                                                      subSampler,
+                                                      targetVar,
+                                                      domainColumn,
+                                                      ssNumber = 50){
+
+  #Cast to data.table
+  data <- data.table::as.data.table(data)
+
+  #Get unique domains and define arrays to store totals, bias, mse and mcerrors per domain
+  uDomains <- as.character(unique(data[, get(domainColumn)]))
+  my1Star <- matrix(0, nrow = ssNumber, ncol = length(uDomains), dimnames = list(NULL, uDomains))
+  mvariancebias <- matrix(0, nrow = ssNumber, ncol = length(uDomains), dimnames = list(NULL, uDomains))
+  mvariancebias2 <- matrix(0, nrow = ssNumber, ncol = length(uDomains), dimnames = list(NULL, uDomains))
+  mbias <- matrix(0, nrow = ssNumber, ncol = length(uDomains), dimnames = list(NULL, uDomains))
+  mbiasSquared <- matrix(0, nrow = ssNumber, ncol = length(uDomains), dimnames = list(NULL, uDomains))
+
+  #Proper implementation
+  mainSample <- sort(mainSample)#Its indexes refer to the entire population (data)
+
+  #Save rows where target variable is NA (non-sample data)
+  nonSampleData <- data[setdiff(mainSampler$key, mainSample),]
+
+  #Get all subsamples from the mainSample (subSampler$key = mainSample)
+  samples <- getSample(subSampler, times = ssNumber)
+  for(i in 1:ssNumber){
+    #Extract current subsample (the one that will be used to train the model)
+    currentSample_s1 <- sort(samples[, i])
+
+    #Calculate complementary sample of currentSample
+    complementarySample_s2 <- sort(setdiff(subSampler$key, currentSample_s1))
+
+    #Train auxModeler with currentSample
+    auxModeler <- train(auxModeler, data, currentSample_s1)
+
+    ## Domain selection
+    for(j in 1:length(uDomains)){
+
+      #Get rows of current domain
+      currentDomainKeys <- data[get(domainColumn) == uDomains[j], which = TRUE]
+
+      #Get non-sample data for current domain
+      currentDomainNSD <- nonSampleData[get(domainColumn) == uDomains[j], which = TRUE]
+
+      #Get portion of complementarySample_s2 for current domain
+      currentDomain_s2 <- intersect(currentDomainKeys, complementarySample_s2)
+
+      #Get portion of currentSample_s1 for current domain
+      currentDomain_s1 <- intersect(currentDomainKeys, currentSample_s1)
+
+      #The following are the predictions over the data that is ouside the
+      #mainSample (i.e. target is unknown) for current domain
+      predictionsNSD <- getPredictions(auxModeler, nonSampleData, currentDomainNSD)
+
+      #Subset of mainSample that the model has not seen (s2).
+      #These are the predictions inside s2 (for the current domain)
+      predictionss2 <- getPredictions(auxModeler, data, currentDomain_s2)
+
+      #Define conditioned sampler
+      #Create an additional conditioned sampler that will only take rows from the
+      #currently specified domain
+      auxMainSamper <- mainSampler
+      auxMainSamper$key <- currentDomainKeys
+      auxMainSamper$strata <- auxMainSamper$strata[currentDomainKeys]
+      #This will provide samples that do not contain any element of s1,
+      #but may contain any other element from the entire population
+      #Its key size is now N - length(s1)
+      cSampler <- conditionedSampler(auxMainSamper, currentDomain_s1)
+
+      #Calculate errors for current domain
+      errors <- predictionss2 - as.matrix(data[currentDomain_s2, targetVar, with = F])[, 1]
+
+      #Calculate remaining metrics
+      varianceBias <- RMLutils:::biasVarianceEstimate(cSampler, currentDomain_s2, errors)
+
+      ## Single sample estimate for current domain
+      ysSum <- sum(as.matrix(data[union(currentDomain_s1, currentDomain_s2), targetVar, with = F])[, 1])#True values
+      y1Star <- ysSum + sum(predictionsNSD)#Add up known values and predicted values outside the sample
+
+      #Store all outputs
+      my1Star[i,j] <- y1Star
+      mvariancebias[i,j] <- varianceBias$vb
+      mvariancebias2[i,j] <- varianceBias$vb2
+      mbias[i,j] <- varianceBias$bias
+      mbiasSquared[i,j] <- (varianceBias$bias)^2
+    }
+  }
+
+  #Caculate aggregates
+  #Add na.rm in case some of the index combinations cause NA to appear
+  #Throw a warning just in case
+
+
+  mean_estimates <- apply(my1Star, 2, mean)
+  mean_estimates_matrix <- do.call(rbind, replicate(ssNumber, mean_estimates, simplify=FALSE))
+  mseComponents <- mbiasSquared - mvariancebias + mvariancebias2 - (my1Star - mean_estimates_matrix)^2
+  if(sum(is.na(mseComponents)) > 0){
+    #Calculate metadata about NAs depending on the domain
+    D <- colnames(mseComponents)
+    NA_by_D <- unname(apply(apply(mseComponents, 2, is.na), 2, sum))
+    na_info <- paste0(sapply(1:length(D), function(x){
+                        paste0(D[x], ": ", NA_by_D[x])
+                      }, USE.NAMES = FALSE), collapse = "\n")
+    warning(paste0("Some subsamples have caused NA values to appear in the variance estimates.\n",
+                   "These values have been removed to output a numeric estimate.\n",
+                   "Of ", nrow(mseComponents)*ncol(mseComponents), " measurements (nDomains*ssNumber), a total of ",
+                   sum(is.na(mseComponents)), " NA values have been detected.\n",
+                   "If this value is large, please consider reviewing the subsampling design.\n",
+                   "NA values by domain:\n",
+                   "------------------------\n",
+                   na_info))
+  }
+  bias <- apply(mbias, 2, mean)
+  mse <- apply(mseComponents, 2, mean, na.rm = TRUE)
+  mcerror <- apply(mseComponents, 2, sd, na.rm = TRUE) / sqrt(apply(mseComponents, 2, length))
+  estim <- list(
+    list(
+      "estimate" = mean_estimates,
+      "bias" = bias,
+      "mse" = mse,
+      "mcerror" = mcerror
+    )
+  )
+
+  names(estim) <- targetVar
+
+  return(estim)
+}
+
 
 #' @title Pre-trained estimator
 #'

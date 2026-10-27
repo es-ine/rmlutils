@@ -401,6 +401,230 @@ test_that("MCSubRBDomainEstimate behaves as expected", {
 #                           ssNumber = 50)
 #})
 
+test_that("MCSubRBMSEEstimate behaves as expected", {
+  set.seed(273)
+  N <- 20000
+  n <- 5000
+  #Generate data
+  data.dt <- generateSBSData(n_samples = N)
+
+  #Sample all very_large stratum
+  info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+  info_strata.dt[, NxS := N_stratum * sdev]
+  info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+
+  small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+  middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+
+  exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+  n_other <- n - exhaustive_strata_n
+
+
+  #Define main sampler
+  main_sampler <- ssSampler(key = 1:N,
+                            ssize = c("small" = round(small_factor * n_other),
+                                      "middle_large" = round(middle_large_factor * n_other),
+                                      "very_large" = exhaustive_strata_n),
+                            strata = data.dt[, business_strata])
+  main_sample <- getSample(main_sampler)
+
+  #Calculate true total and set to NA all elements not belonging to the main sample
+  true_total <- data.dt[, sum(revenue)]
+  data.dt[!main_sample, revenue := NA]
+
+  #Define subsampler
+  ss_factor <- 0.7
+  sub_sampler <- ssSampler(key = main_sample,
+                           ssize = c("small" = round(ss_factor * small_factor * n_other),
+                                     "middle_large" = round(ss_factor * middle_large_factor * n_other),
+                                     "very_large" = exhaustive_strata_n),
+                           strata = data.dt[main_sample, business_strata])
+
+  #Define modeler
+  target <- "revenue"
+  regressors <- setdiff(names(data.dt), target)
+  params <- list(
+    "mtry" = 3,
+    "num.trees" = 40,
+    "max.depth" = 20
+  )
+  modeler <- rangerRegressorModeler(params, target, regressors)
+
+  # Testing starts here:
+  #auxModeler is not a regressorModeler
+  expect_error(MCSubRBMSEEstimate(auxModeler = "modeler",
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = 50))
+  #MainSampler is not a sampler
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = "main_sampler",
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = 50))
+
+  #subSampler is not a sampler
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = "sub_sampler",
+                                  targetVar = target,
+                                  ssNumber = 50))
+  #Main sample keys should match data.dt row numbers
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt[1:100],
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = 50))
+
+  #MainSample must be a subset of mainSampler key
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = 20000:21000,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = 50))
+
+  #The subSampler keys must be equal to the mainSample
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = 15001:20000,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = 50))
+  #targetVar must be a character
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = 1,
+                                  ssNumber = 50))
+
+  #targetVar must be the auxModeler target (or one of them at least)
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = "wrong_target",
+                                  ssNumber = 50))
+
+  #ssNumber must be a numeric variable
+  expect_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                  data = data.dt,
+                                  mainSampler = main_sampler,
+                                  mainSample = main_sample,
+                                  subSampler = sub_sampler,
+                                  targetVar = target,
+                                  ssNumber = "50"))
+
+  estim <- expect_no_error(MCSubRBMSEEstimate(auxModeler = modeler,
+                                           data = data.dt,
+                                           mainSampler = main_sampler,
+                                           mainSample = main_sample,
+                                           subSampler = sub_sampler,
+                                           targetVar = target,
+                                           ssNumber = 50))
+  print(paste0("True total: ", true_total))
+  print("-----------------------")
+  print("Estimate values:")
+  print("-----------------------")
+  print(paste0("Total estimate (with bias): ", estim$revenue$estimate))
+  print(paste0("Bias estimate: ", estim$revenue$bias))
+  print(paste0("Total estimate (with bias correction): ", estim$revenue$estimate + estim$revenue$bias))
+  print(paste0("MSE of total estimate: ", estim$revenue$mse))
+  print(paste0("Monte Carlo error of total estimate: ", estim$revenue$mcerror))
+})
+
+test_that("MCSubRBMSEDomainEstimate behaves as expected", {
+  #Most validations have happened in the previous test
+  set.seed(273)
+  N <- 20000
+  n <- 5000
+  #Generate data
+  data.dt <- generateSBSData(n_samples = N)
+
+  #Sample all very_large stratum
+  info_strata.dt <- data.dt[business_strata != "very_large", .(sdev = sd(revenue), N_stratum = .N), by = c("business_strata")]
+  info_strata.dt[, NxS := N_stratum * sdev]
+  info_strata.dt[, neyman_factor := NxS/sum(NxS)]
+
+  small_factor <- round(info_strata.dt[business_strata == "small", neyman_factor], 2)
+  middle_large_factor <- round(info_strata.dt[business_strata == "middle_large", neyman_factor], 2)
+
+  exhaustive_strata_n <- data.dt[business_strata == "very_large", .N]
+  n_other <- n - exhaustive_strata_n
+
+
+  #Define main sampler
+  main_sampler <- ssSampler(key = 1:N,
+                            ssize = c("small" = round(small_factor * n_other),
+                                      "middle_large" = round(middle_large_factor * n_other),
+                                      "very_large" = exhaustive_strata_n),
+                            strata = data.dt[, business_strata])
+  main_sample <- getSample(main_sampler)
+
+  #Calculate true total and set to NA all elements not belonging to the main sample
+  true_total <- data.dt[, sum(revenue)]
+  data.dt[!main_sample, revenue := NA]
+
+  #Define subsampler
+  ss_factor <- 0.7
+  sub_sampler <- ssSampler(key = main_sample,
+                           ssize = c("small" = round(ss_factor * small_factor * n_other),
+                                     "middle_large" = round(ss_factor * middle_large_factor * n_other),
+                                     "very_large" = exhaustive_strata_n),
+                           strata = data.dt[main_sample, business_strata])
+
+  #Define modeler
+  target <- "revenue"
+  regressors <- setdiff(names(data.dt), target)
+  params <- list(
+    "mtry" = 3,
+    "num.trees" = 40,
+    "max.depth" = 20
+  )
+  modeler <- rangerRegressorModeler(params, target, regressors)
+
+  # Testing starts here:
+  #auxModeler is not a regressorModeler
+  expect_error(MCSubRBMSEDomainEstimate(auxModeler = modeler,
+                                        data = data.dt[order(activity_type)],
+                                        mainSampler = main_sampler,
+                                        mainSample = 1:5000,
+                                        subSampler = sub_sampler,
+                                        targetVar = target,
+                                        domainColumn = "activity_type",
+                                        ssNumber = 50))
+
+  estim <- suppressWarnings(expect_no_error(MCSubRBMSEDomainEstimate(auxModeler = modeler,
+                                                                     data = data.dt,
+                                                                     mainSampler = main_sampler,
+                                                                     mainSample = main_sample,
+                                                                     subSampler = sub_sampler,
+                                                                     targetVar = target,
+                                                                     domainColumn = "activity_type",
+                                                                     ssNumber = 50)))
+  print(paste0("True total: ", true_total))
+  print("-----------------------")
+  print("Estimate values:")
+  print("-----------------------")
+  print(paste0("Total estimate (with bias): ", sum(estim$revenue$estimate)))
+  print(paste0("Bias estimate: ", sum(estim$revenue$bias)))
+  print(paste0("Total estimate (with bias correction): ", sum(estim$revenue$estimate + estim$revenue$bias)))
+})
+
 test_that("preTrainedEstimate behaves as expected",{
   set.seed(273)
   data.dt <- generateStratifiedDomainModelAssistedEstimateData(n_samples = 1000, generate_random_weights = FALSE)

@@ -351,7 +351,7 @@ groupTotalErrorCostFunction.character <- function(weightsColumn, groupVars) {
   return(object)
 }
 
-#' @title Mean squared error of the MCSubRBEstimator
+#' @title Monte Carlo Subsampling Rao-Blackwellized Estimate (Biased) as a cost function
 #'
 #' @name MCSubRBMSECostFunction
 #'

@@ -94,6 +94,8 @@ Al utilizar este repositorio, usted reconoce que:
     * RDomainEstimate
     * MCSubRBEstimate
     * MCSubRBDomainEstimate
+    * MCSubRBMSEEstimate
+    * MCSubRBMSEDomainEstimate
     * preTrainedEstimate
     * preTrainedDomainEstimate
 

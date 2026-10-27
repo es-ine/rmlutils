@@ -3,7 +3,7 @@
 \name{MCSubRBMSECostFunction}
 \alias{MCSubRBMSECostFunction}
 \alias{MCSubRBMSECostFunction.sampler}
-\title{Mean squared error of the MCSubRBEstimator}
+\title{Monte Carlo Subsampling Rao-Blackwellized Estimate (Biased) as a cost function}
 \usage{
 MCSubRBMSECostFunction(sampler, sampleKeys, nonSampleData)
 

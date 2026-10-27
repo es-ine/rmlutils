@@ -115,5 +115,7 @@ print(paste0("Standard error for the estimate of the Monte Carlo error: ", sqrt(
 
 \code{\link{MCSubRBDomainEstimate}}
 
-\code{\link{biasVarianceEstimate}}
+\code{\link{MCSubRBMSEEstimate}}
+
+\code{\link{MCSubRBMSEDomainEstimate}}
 }

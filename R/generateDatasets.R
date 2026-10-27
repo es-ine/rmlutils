@@ -560,3 +560,118 @@ generateStratifiedDomainModelAssistedEstimateData <- function(n_samples = 100,
   }
   return(data.dt)
 }
+
+#' @title Generate Stratified Domain Model Assisted Estimate Data
+#'
+#' @description  A custom function to generate a more complex dataset for
+#' testing model-assisted estimation with stratified sampling.
+#' It contains five columns:
+#'
+#' \itemize{
+#'  \item num_employees: Number of employees. It follows a logNormal(4, 1.2) distribution.
+#'  \item business_strata: Factor variable defined with the 0.5 and 0.95 percentiles of num_employees.
+#'  \item activity_type: Factor variable indicating the main activity of the business.
+#'  \item revenue (Target): Numeric variable, which depends on the previous three variables (with added noise).
+#'  \item tax: Numeric variable which is roughly proportional to revenue, with added noise.
+#' }
+#'
+#' @param n_samples Amount of samples (rows) to return. n_samples shold be at least 10000 to generate a representative dataset.
+#'
+#' @return data.table with dimensions (n_samples, 5), explained above and in the generateStratifiedDomainEstimateData documentation.
+#'
+#' @examples
+#' data <- generateSBSData(n_samples = 10000)
+#' head(data)
+#'
+#' @importFrom data.table data.table
+#'
+#' @seealso \code{\link{generateRegressionData}} for simple regression case.
+#' @seealso \code{\link{generateEstimateData}} for estimation case.
+#' @seealso \code{\link{generateStratifiedEstimateData}} for stratified estimation case.
+#' @seealso \code{\link{generateStratifiedDomainEstimateData}} for stratified estimation with domains case.
+#' @seealso \code{\link{generateModelAssistedRegressionData}} for model-assisted regression (and/or estimation) case.
+#' @seealso \code{\link{generateStratifiedDomainModelAssistedEstimateData}} for model-assisted regression (and/or estimation) in a domain-stratified case.
+#'
+#' @export
+generateSBSData <- function(n_samples = 10000){
+  if(n_samples < 10000){
+    warning("Ideally, n_samples should be around 10000 or more to create a representative dataset.")
+  }
+  set.seed(273)
+  #Num empleados
+  data.dt <- data.table("num_employees" = ceiling(rlnorm(n_samples, 4, 1.2)))
+  #Estrato empresa
+  p50 <- quantile(data.dt[, num_employees], 0.5)
+  p95 <- quantile(data.dt[, num_employees], 0.95)
+  data.dt[num_employees <= p50, business_strata := "small"]
+  data.dt[num_employees > p50, business_strata := ifelse(num_employees <= p95, "middle_large", "very_large")]
+  data.dt[, business_strata := factor(business_strata, levels = c("small", "middle_large", "very_large"))]
+  #Tipo actividad
+  act_types <- c("agriculture",
+                 "extractive_industry",
+                 "manufacture",
+                 "energy_supply",
+                 "commerce",
+                 "transport",
+                 "hospitality_industry",
+                 "technology")
+  n_types <- length(act_types)
+  act_factor <- rnorm(n_types, 8, 3)
+  names(act_factor) <- act_types
+  act_logsd <- act_factor/10
+  names(act_logsd) <- act_types
+
+  act_weight_strata_small <- rlnorm(n_types)
+  act_weight_strata_small <- act_weight_strata_small/sum(act_weight_strata_small)
+
+  act_weight_strata_mid <- rlnorm(n_types)
+  act_weight_strata_mid <- act_weight_strata_mid/sum(act_weight_strata_mid)
+
+  act_weight_strata_large <- rlnorm(n_types)
+  act_weight_strata_large <- act_weight_strata_large/sum(act_weight_strata_large)
+
+  data.dt[, activity_type := NA_character_]
+  data.dt[business_strata == "small",
+          activity_type := sample(act_types,
+                                   size = nrow(data.dt[business_strata == "small"]),
+                                   replace = TRUE,
+                                   prob = act_weight_strata_small)]
+  data.dt[business_strata == "middle_large",
+          activity_type := sample(act_types,
+                                   size = nrow(data.dt[business_strata == "middle_large"]),
+                                   replace = TRUE,
+                                   prob = act_weight_strata_mid)]
+  data.dt[business_strata == "very_large",
+          activity_type := sample(act_types,
+                                   size = nrow(data.dt[business_strata == "very_large"]),
+                                   replace = TRUE,
+                                   prob = act_weight_strata_large)]
+  data.dt[, activity_type := factor(activity_type, levels = act_types)]
+  #Cifra de negocios
+  data.dt[business_strata == "small", num_employees_factor := rnorm(nrow(data.dt[business_strata == "small"]), 2000, 100)]
+  data.dt[business_strata == "middle_large", num_employees_factor := rnorm(nrow(data.dt[business_strata == "middle_large"]), 2500, 250)]
+  data.dt[business_strata == "very_large", num_employees_factor := rnorm(nrow(data.dt[business_strata == "very_large"]), 1000, 300)]
+
+  data.dt[business_strata == "small", tipo_act_factor := rlnorm(.N, act_factor[activity_type]*0.5, act_logsd[activity_type]), by = c("activity_type")]
+  data.dt[business_strata == "middle_large", tipo_act_factor := rlnorm(.N, act_factor[activity_type]*0.6, act_logsd[activity_type]), by = c("activity_type")]
+  data.dt[business_strata == "very_large", tipo_act_factor := rlnorm(.N, act_factor[activity_type], act_logsd[activity_type]), by = c("activity_type")]
+
+  data.dt[, revenue := num_employees_factor * num_employees + 50 * tipo_act_factor ]
+
+  #tax de sociedades
+  names(act_weight_strata_small) <- act_types
+  data.dt[, tax := revenue * act_weight_strata_small[activity_type]]
+
+  #Ruido añadido
+  data.dt[, sigma := sqrt(sd(revenue)), by =c("business_strata", "activity_type")]
+  data.dt[, revenue := revenue + rnorm(.N, mean = 0, sd = sigma)]
+
+  #Eliminación de variables auxiliares
+  data.dt[, `:=` (
+    num_employees_factor = NULL,
+    tipo_act_factor = NULL,
+    sigma = NULL
+  )]
+
+  return(data.dt)
+}
