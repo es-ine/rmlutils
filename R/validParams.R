@@ -508,9 +508,9 @@
 .validate_H2OModeler <- function(object){
   .validate_common_modeler_args(object)
   if(class(object)[3] == "regressorModeler"){
-    available_models <- c("deeplearning", "gam", "glm", "randomForest", "rulefit", "xgboost")
+    available_models <- c("deeplearning", "gbm", "gam", "glm", "randomForest", "rulefit", "xgboost")
   }else{#Classifier modeler
-    available_models <- c("adaBoost", "decision_tree", "deeplearning", "gam", "glm", "naiveBayes", "psvm", "randomForest", "rulefit", "xgboost")
+    available_models <- c("adaBoost", "decision_tree", "deeplearning", "gbm", "gam", "glm", "naiveBayes", "psvm", "randomForest", "rulefit", "xgboost")
   }
 
   if(!object$model %in% available_models){
